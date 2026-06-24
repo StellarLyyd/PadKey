@@ -354,6 +354,9 @@
 .studio-modal-heading h2 { margin: 7px 0 0; font-size: 19px; letter-spacing: -.025em; }
 .studio-connection-dialog .studio-segmented { margin-top: 24px; }
 .studio-dialog-copy { min-height: 64px; margin: 18px 0; color: var(--studio-body); font-size: 12px; line-height: 1.55; }
+.studio-ble-connect { margin: 18px 0; }
+.studio-ble-connect .studio-dialog-copy { min-height: 0; margin: 0; }
+.studio-ble-connect .ble-source-picker { text-align: left; }
 .studio-field { display: grid; gap: 8px; margin: 18px 0; color: var(--studio-body); font-size: 11px; font-weight: 600; }
 .studio-field input { height: 44px; border: 1px solid var(--studio-border); border-radius: 9px; padding: 0 12px; color: var(--studio-ink); background: #fafaf8; font-size: 13px; font-weight: 400; }
 .studio-inline-error { margin: 0 0 14px; color: var(--studio-red); font-size: 11px; line-height: 1.5; }

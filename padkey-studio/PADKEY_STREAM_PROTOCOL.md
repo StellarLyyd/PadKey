@@ -85,10 +85,19 @@ BLE advertises as `PadKey-S3` with custom service `7f23c000-2c44-4e7d-9f53-00000
 | Characteristic | UUID | Purpose |
 | --- | --- | --- |
 | Telemetry | `7f23c001-2c44-4e7d-9f53-000000000001` | Newline-terminated JSON, chunked across notifications |
-| Audio monitor | `7f23c002-2c44-4e7d-9f53-000000000001` | Sparse binary waveform snapshots |
+| Recordable audio | `7f23c002-2c44-4e7d-9f53-000000000001` | Continuous PCM from one selected source |
 | Control | `7f23c003-2c44-4e7d-9f53-000000000001` | Reserved device commands |
 
-BLE audio uses the PKAU header with protocol version `4`. Version 4 is explicitly non-continuous monitor data. The front end may draw it as a live preview but must not append it into a WAV/MP3 recording or count its sequence gaps as dropped recording packets.
+BLE audio uses the PKAU header with protocol version `3`, one channel, an 8 kHz sample rate, consecutive packet sequence numbers, and the selected sensor id. Version 3 is recordable PCM. Legacy version 4 remains defined as preview-only and must not be appended to recordings.
+
+The control characteristic accepts UTF-8 JSON:
+
+```json
+{"type":"set_source","sourceId":1}
+{"type":"set_streaming","enabled":true}
+```
+
+`sourceId` is `0` for INMP441, `1` for MAX4466, or `2` for piezo. BLE streams only one source at a time.
 
 The firmware also publishes the standard Battery Service `0x180F` and Battery Level characteristic `0x2A19`.
 
@@ -121,4 +130,4 @@ The wired reference sketch is available at:
 firmware/PadKey_Breadboard_PCM_USB/PadKey_Breadboard_PCM_USB.ino
 ```
 
-The production sketch at `firmware/PadKey_Breadboard_Production/PadKey_Breadboard_Production.ino` captures the INMP441 over I2S plus the MAX4466 on A5, protected piezo input on A8, and Charger BFF BATMON on A0 through ADC1 continuous DMA. It sends independent 16 kHz signed PCM channels over USB or Wi-Fi and low-power monitoring data over BLE.
+The production sketch at `firmware/PadKey_Breadboard_Production/PadKey_Breadboard_Production.ino` captures the INMP441 over I2S plus the MAX4466 on A5, protected piezo input on A8, and Charger BFF BATMON on A0 through ADC1 continuous DMA. It sends independent 16 kHz signed PCM channels over USB or Wi-Fi and one selected continuous 8 kHz channel over BLE.

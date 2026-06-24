@@ -9,10 +9,10 @@ Target: Seeed Studio XIAO ESP32-S3 with three independent sensor channels, batte
 - protected piezo contact sensor on A8
 - Adafruit Charger BFF A2/BATMON sensing on XIAO A0
 - USB full-waveform streaming at 921600 baud
-- BLE telemetry, battery level, and low-power waveform previews as `PadKey-S3`
+- BLE telemetry, battery level, and one continuous 8 kHz recording channel as `PadKey-S3`
 - optional Wi-Fi WebSocket full-waveform streaming
 
-BLE is intentionally a preview transport in this revision. Its sparse waveform snapshots are useful for live signal checks but are not continuous playable audio. Use USB or Wi-Fi for WAV/MP3 recordings.
+BLE streams one selected sensor continuously so the browser can create playable WAV/MP3 recordings without saturating the wireless link. MAX4466 is the default; Studio can switch the source to INMP441 or piezo. USB and Wi-Fi remain the multi-channel paths.
 
 ## Arduino IDE settings
 
@@ -58,6 +58,16 @@ The cell datasheet limits continuous discharge to 500 mA. Measure the completed 
 
 The BFF divides the monitored rail by 2, so the firmware doubles the A0 voltage estimate. Battery percentage is approximate; calibrate the displayed voltage against a multimeter before relying on it.
 
+### What the Charger BFF LED means
+
+- The yellow charge LED turns on only while USB power is present and the battery is actively charging.
+- The LED normally turns off when USB is removed; that does not mean battery power is off.
+- The BFF slide switch controls battery output only when USB is absent. Put it in **ON** for wireless use.
+
+If BLE disconnects immediately when USB is removed, the XIAO lost power. Check the BFF switch, JST polarity/seating, shared ground, and the BFF-to-XIAO 5V power connection. With USB removed and the BFF switched on, verify the XIAO power rail with a multimeter before debugging software. A2/BATMON to A0 is only a sensing wire and cannot power the XIAO.
+
+The production firmware blinks the XIAO user LED three times after a successful boot. After that, the user LED resumes its sound-detection role. This LED is separate from the Charger BFF's charge LED.
+
 ## Piezo protection
 
 Do not connect an unprotected piezo directly to A8. Piezo elements can generate damaging voltage spikes. Use a qualified protection network, such as a 100 kOhm series resistor, a high-impedance mid-supply bias, and Schottky clamps to 0 V and 3.3 V. Verify the protected node remains inside the ESP32-S3 input limits with an oscilloscope before hard impacts.
@@ -76,7 +86,7 @@ The custom service uses:
 
 - service: `7f23c000-2c44-4e7d-9f53-000000000001`
 - telemetry: `7f23c001-2c44-4e7d-9f53-000000000001`
-- monitor audio: `7f23c002-2c44-4e7d-9f53-000000000001`
+- recordable audio: `7f23c002-2c44-4e7d-9f53-000000000001`
 - control: `7f23c003-2c44-4e7d-9f53-000000000001`
 - standard Battery Service: `0x180F`
 
@@ -91,4 +101,4 @@ Wi-Fi is disabled by default. To enable it:
 
 Do not commit real Wi-Fi credentials to GitHub.
 
-For best battery life, use BLE alone. For wireless audio recording, enable Wi-Fi and disconnect BLE in Studio so only the required browser transport is active.
+For best battery life, use BLE with one selected source. Use Wi-Fi when you need all three sensor waveforms wirelessly.

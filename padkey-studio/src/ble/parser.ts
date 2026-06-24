@@ -35,6 +35,9 @@ function frameFromJson(raw: string): SensorFrame | null {
     const mic = Number(value.inmp441 ?? value.mic ?? value.micPeak ?? 0);
     const max4466 = Number(value.max4466 ?? value.analogMic ?? 0);
     const piezo = Number(value.piezo ?? value.pz1 ?? 0);
+    const inmp441Rms = Number(value.inmp441Rms ?? 0);
+    const max4466Rms = Number(value.max4466Rms ?? 0);
+    const piezoRms = Number(value.piezoRms ?? 0);
     const noiseFloor = Number(value.noiseFloor ?? 0);
     const thresholdMic = Number(value.gate ?? value.thresholdMic ?? value.micThreshold ?? 1800);
     const thresholdPiezo = Number(value.thresholdPiezo ?? value.piezoThreshold ?? 100);
@@ -42,7 +45,10 @@ function frameFromJson(raw: string): SensorFrame | null {
     const batteryPercent = Number(value.batteryPercent ?? value.bat ?? 0);
     const rawPowerMode = String(value.powerMode ?? "unknown");
     const powerMode = rawPowerMode === "battery" || rawPowerMode === "usb_or_charging" ? rawPowerMode : "unknown";
-    if (![mic, max4466, piezo, noiseFloor, thresholdMic, thresholdPiezo, batteryVoltage, batteryPercent].every(Number.isFinite)) {
+    const parsedSourceId = Number(value.sourceId ?? 1);
+    const sourceId = parsedSourceId === 0 || parsedSourceId === 2 ? parsedSourceId : 1;
+    const sampleRate = Number(value.sampleRate ?? 16000);
+    if (![mic, max4466, piezo, inmp441Rms, max4466Rms, piezoRms, noiseFloor, thresholdMic, thresholdPiezo, batteryVoltage, batteryPercent, sampleRate].every(Number.isFinite)) {
       return null;
     }
 
@@ -50,6 +56,9 @@ function frameFromJson(raw: string): SensorFrame | null {
       pz1: piezo,
       mic,
       max4466,
+      inmp441Rms,
+      max4466Rms,
+      piezoRms,
       qt: Number(value.qt ?? 0),
       pz2: Number(value.pz2 ?? 0),
       mus: Number(value.mus ?? 0),
@@ -59,6 +68,8 @@ function frameFromJson(raw: string): SensorFrame | null {
       batteryVoltage,
       batteryPercent: Math.max(0, Math.min(100, Math.round(batteryPercent))),
       powerMode,
+      sourceId,
+      sampleRate,
       piezo,
       noiseFloor,
       thresholdMic,
@@ -106,6 +117,9 @@ export function parseFrame(raw: string): SensorFrame | null {
     pz1: pz1 ?? 0,
     mic: micValue,
     max4466: max4466 ?? 0,
+    inmp441Rms: 0,
+    max4466Rms: 0,
+    piezoRms: 0,
     qt: qt ?? 0,
     pz2: pz2 ?? 0,
     mus: mus ?? 0,
@@ -115,6 +129,8 @@ export function parseFrame(raw: string): SensorFrame | null {
     batteryVoltage: 0,
     batteryPercent: Math.max(0, Math.min(100, bat ?? 0)),
     powerMode: "unknown",
+    sourceId: 1,
+    sampleRate: 16000,
     piezo,
     noiseFloor,
     thresholdMic,

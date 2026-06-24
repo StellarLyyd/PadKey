@@ -33,7 +33,7 @@ const howSteps = [
   },
   {
     title: "USB, BLE, or Wi-Fi transports the stream",
-    body: "USB and Wi-Fi carry continuous recording audio. BLE saves power while carrying telemetry, battery status, and waveform snapshots.",
+    body: "USB and Wi-Fi can carry all three recording channels. BLE carries telemetry, battery status, and one selected continuous 8 kHz recording channel.",
     note: "Sequence numbers let the frontend detect missing PCM packets."
   },
   {
