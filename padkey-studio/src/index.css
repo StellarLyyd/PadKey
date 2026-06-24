@@ -561,6 +561,8 @@ audio:focus-visible {
 }
 
 .agent-panel { display: grid; gap: 18px; }
+.padkey-native .app-header { display: none; }
+.padkey-native .app-shell { min-height: 100vh; }
 .brand-logo { display: block; width: 116px; height: 32px; object-fit: contain; }
 .agent-heading { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; padding: 28px 30px 8px; }
 .agent-heading .panel-copy { max-width: 680px; }

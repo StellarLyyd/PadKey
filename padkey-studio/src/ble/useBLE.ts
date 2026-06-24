@@ -1,4 +1,5 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { decodeBase64Bytes, hasNativePadKeyBridge, postNativePadKeyMessage, type PadKeyNativeEvent } from "../nativeBridge";
 import { useAppStore } from "../store";
 import { parseBinaryAudioPackets, parseTransportLine } from "../transport/parsePacket";
 
@@ -69,6 +70,33 @@ export function useBLE(): BLEController {
   const setBLEStatus = useAppStore((state) => state.setBLEStatus);
   const setBleStreamConfig = useAppStore((state) => state.setBleStreamConfig);
 
+  useEffect(() => {
+    if (!hasNativePadKeyBridge()) return;
+    const listener = (rawEvent: Event) => {
+      const event = rawEvent as PadKeyNativeEvent;
+      if (event.detail.type === "ble-status") {
+        const next = String(event.detail.status ?? "error");
+        if (next === "connected") setBLEConnected(true, String(event.detail.name ?? "PadKey-S3"));
+        else if (next === "disconnected") setBLEConnected(false);
+        else if (next === "error") setBLEStatus("error", String(event.detail.message ?? "BLE connection failed"));
+      } else if (event.detail.type === "ble-telemetry") {
+        for (const line of String(event.detail.text ?? "").split(/\r?\n/)) {
+          const packet = parseTransportLine(line, "ble");
+          if (packet?.kind === "telemetry") pushFrame(packet.frame);
+          if (packet?.kind === "status") setDeviceStatus(packet.status);
+        }
+      } else if (event.detail.type === "ble-audio") {
+        const bytes = decodeBase64Bytes(event.detail.base64);
+        const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+        for (const packet of parseBinaryAudioPackets(buffer)) pushAudioPacket(packet);
+      } else if (event.detail.type === "ble-battery") {
+        setBatteryStatus(Number(event.detail.percent ?? 0));
+      }
+    };
+    window.addEventListener("padkey-native", listener);
+    return () => window.removeEventListener("padkey-native", listener);
+  }, [pushAudioPacket, pushFrame, setBatteryStatus, setBLEConnected, setBLEStatus, setDeviceStatus]);
+
   const handleTelemetry = useCallback((event: Event) => {
     const characteristic = event.target as BluetoothRemoteGATTCharacteristic;
     const buffer = characteristicBuffer(characteristic);
@@ -109,6 +137,11 @@ export function useBLE(): BLEController {
   }, [setBLEConnected]);
 
   const disconnect = useCallback(() => {
+    if (hasNativePadKeyBridge()) {
+      postNativePadKeyMessage({ action: "disconnectBLE" });
+      handleDisconnect();
+      return;
+    }
     const telemetry = telemetryRef.current;
     const audio = audioRef.current;
     const battery = batteryRef.current;
@@ -126,6 +159,12 @@ export function useBLE(): BLEController {
   }, [handleAudio, handleBattery, handleDisconnect, handleTelemetry]);
 
   const connect = useCallback(async () => {
+    if (hasNativePadKeyBridge()) {
+      disconnect();
+      setBLEStatus("connecting");
+      postNativePadKeyMessage({ action: "connectBLE" });
+      return;
+    }
     if (!navigator.bluetooth) {
       setBLEStatus("error", "Web Bluetooth is unavailable - use Chrome or Edge on macOS");
       return;
@@ -186,11 +225,13 @@ export function useBLE(): BLEController {
   }, [disconnect, handleAudio, handleBattery, handleDisconnect, handleTelemetry, setBatteryStatus, setBLEConnected, setBLEStatus]);
 
   const setSource = useCallback(async (sourceId: 0 | 1 | 2) => {
+    if (hasNativePadKeyBridge()) postNativePadKeyMessage({ action: "setBLESource", sourceId });
     await writeControl(controlRef.current, { type: "set_source", sourceId });
     setBleStreamConfig(sourceId, 8000);
   }, [setBleStreamConfig]);
 
   const setStreaming = useCallback(async (enabled: boolean) => {
+    if (hasNativePadKeyBridge()) postNativePadKeyMessage({ action: "setBLEStreaming", enabled });
     await writeControl(controlRef.current, { type: "set_streaming", enabled });
   }, []);
 

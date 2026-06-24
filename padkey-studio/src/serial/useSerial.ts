@@ -1,4 +1,5 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
+import { decodeBase64Bytes, hasNativePadKeyBridge, postNativePadKeyMessage, type PadKeyNativeEvent } from "../nativeBridge";
 import { useAppStore } from "../store";
 import { parseTransportLine } from "../transport/parsePacket";
 
@@ -70,8 +71,42 @@ export function useSerial(baudRate = 115200): {
   const setSerialStatus = useAppStore((state) => state.setSerialStatus);
   const setDeviceStatus = useAppStore((state) => state.setDeviceStatus);
 
+  const consumeSerialBytes = useCallback((bytes: Uint8Array) => {
+    serialBuffer += serialDecoder.decode(bytes, { stream: true });
+    const lines = serialBuffer.split(/\r?\n/);
+    serialBuffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const packet = parseTransportLine(line, "serial");
+      if (packet?.kind === "telemetry") pushFrame(packet.frame);
+      if (packet?.kind === "audio") pushAudioPacket(packet.audio);
+      if (packet?.kind === "status") setDeviceStatus(packet.status);
+    }
+  }, [pushAudioPacket, pushFrame, setDeviceStatus]);
+
+  useEffect(() => {
+    if (!hasNativePadKeyBridge()) return;
+    const listener = (rawEvent: Event) => {
+      const event = rawEvent as PadKeyNativeEvent;
+      if (event.detail.type === "serial-data") consumeSerialBytes(decodeBase64Bytes(event.detail.base64));
+      if (event.detail.type === "serial-status") {
+        const next = String(event.detail.status ?? "error");
+        if (next === "connected") setSerialConnected(true, String(event.detail.name ?? "PadKey USB"));
+        else if (next === "disconnected") setSerialConnected(false);
+        else if (next === "error") setSerialStatus("error", String(event.detail.message ?? "USB connection failed"));
+      }
+    };
+    window.addEventListener("padkey-native", listener);
+    return () => window.removeEventListener("padkey-native", listener);
+  }, [consumeSerialBytes, setSerialConnected, setSerialStatus]);
+
   const disconnect = useCallback(async () => {
     shouldStop = true;
+    if (hasNativePadKeyBridge()) {
+      postNativePadKeyMessage({ action: "disconnectSerial" });
+      serialBuffer = "";
+      setSerialConnected(false);
+      return;
+    }
     const reader = activeReader;
     activeReader = null;
 
@@ -111,16 +146,7 @@ export function useSerial(baudRate = 115200): {
           break;
         }
 
-        serialBuffer += serialDecoder.decode(value, { stream: true });
-        const lines = serialBuffer.split(/\r?\n/);
-        serialBuffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          const packet = parseTransportLine(line, "serial");
-          if (packet?.kind === "telemetry") pushFrame(packet.frame);
-          if (packet?.kind === "audio") pushAudioPacket(packet.audio);
-          if (packet?.kind === "status") setDeviceStatus(packet.status);
-        }
+        consumeSerialBytes(value);
       }
     } finally {
       if (activeReader === reader) {
@@ -133,9 +159,14 @@ export function useSerial(baudRate = 115200): {
         // The reader may already be released during manual disconnect.
       }
     }
-  }, [pushAudioPacket, pushFrame, setDeviceStatus]);
+  }, [consumeSerialBytes]);
 
   const connect = useCallback(async () => {
+    if (hasNativePadKeyBridge()) {
+      setSerialStatus("connecting");
+      postNativePadKeyMessage({ action: "connectSerial", baudRate });
+      return;
+    }
     const serial = (navigator as NavigatorWithSerial).serial;
     if (!serial) {
       setSerialStatus("error", "Web Serial unavailable - use Chrome or Edge on localhost");

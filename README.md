@@ -1,13 +1,29 @@
 # PadKey
 
-PadKey is an experimental voice and contact-sensing system built around the Seeed Studio XIAO ESP32-S3. This repository contains the device experiments, production breadboard firmware, and the PadKey Studio browser application.
+PadKey is a voice, contact-sensing, dictation, and Mac-control system built around the Seeed Studio XIAO ESP32-S3. This repository contains the production firmware, browser Studio, and a unified native macOS application.
+
+## PadKey for macOS
+
+The standalone native app lives in [`macos/PadKey/`](./macos/PadKey/). It combines the complete PadKey Studio workflow with local dictation, cross-app text insertion, Notes and browser actions, confirmed FaceTime preparation, Scratchpad, personal vocabulary, voice setup, and pipeline diagnostics.
+
+It is a separate application with bundle identifier `com.stellarlyyd.padkey`. Installing it does not replace the standalone OwoFlow app or the browser-only PadKey Studio.
+
+Build, sign, install, and launch it with:
+
+```bash
+git clone https://github.com/StellarLyyd/PadKey.git
+cd PadKey/macos/PadKey
+./script/build_and_run.sh
+```
+
+The script builds the sibling Studio frontend, embeds it in the native app, installs `~/Applications/PadKey.app`, and launches it. The native bridge supplies USB serial and BLE access that WebKit does not expose; Wi-Fi continues through the Studio WebSocket transport.
 
 ## PadKey Studio
 
 The front end lives in [`padkey-studio/`](./padkey-studio/). It provides a human-friendly workflow for:
 
 - connecting a PadKey over USB, recordable BLE, or Wi-Fi;
-- recording independent INMP441, MAX4466, and piezo waveform channels over USB/Wi-Fi, or one selectable continuous channel over BLE;
+- recording independent INMP441, MAX4466, and piezo waveform channels over USB, Wi-Fi, or synchronized three-channel BLE;
 - recording the MacBook microphone as a baseline comparison;
 - viewing the Charger BFF battery estimate and power state;
 - viewing, listening to, comparing, and trimming waveforms;
@@ -46,7 +62,7 @@ The current three-channel sketch is:
 
 [`padkey-studio/firmware/PadKey_Breadboard_Production/PadKey_Breadboard_Production.ino`](./padkey-studio/firmware/PadKey_Breadboard_Production/PadKey_Breadboard_Production.ino)
 
-It streams 16 kHz signed waveform data for the INMP441, MAX4466 on A5, and a protected piezo input on A8; monitors the Charger BFF on A0; and advertises over BLE as `PadKey-S3`. BLE carries one selectable, continuous 8 kHz recording channel using bandwidth-efficient G.711 μ-law, which Studio expands to signed 16-bit PCM. Follow the adjacent [firmware README](./padkey-studio/firmware/PadKey_Breadboard_Production/README.md) before wiring or uploading it.
+It streams 16 kHz signed waveform data for the INMP441, MAX4466 on A5, and a protected piezo input on A8; monitors the Charger BFF on A0; and advertises over BLE as `PadKey-S3`. BLE carries synchronized 8 kHz IMA ADPCM for all three sensors in MTU-safe packets, which Studio expands to signed 16-bit PCM. Follow the adjacent [firmware README](./padkey-studio/firmware/PadKey_Breadboard_Production/README.md) before wiring or uploading it.
 
 The standalone `.ino`, Python, and Wi-Fi files at the repository root are earlier experiments retained for reference.
 

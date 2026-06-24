@@ -1,0 +1,33 @@
+name: PadKey CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  studio:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: padkey-studio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: padkey-studio/package-lock.json
+      - run: npm ci
+      - run: npm run build -- --base=/studio/
+
+  macos:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: macos/PadKey
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+      - run: swift build -c release --product padkey
+      - run: bash -n script/build_and_run.sh script/setup_whisper.sh script/setup_sherpa.sh script/setup_mega_asr.sh

@@ -1,7 +1,7 @@
 import { Check, Command, ExternalLink, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-const AGENT_URL = "http://127.0.0.1:8788";
+const AGENT_URL = window.__PADKEY_AGENT_URL__ ?? "http://127.0.0.1:8788";
 
 type AgentResponse = {
   ok: boolean;
@@ -36,7 +36,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${AGENT_URL}${path}`, init);
   } catch {
-    throw new Error("PadKey Mac Control is offline. Launch the OwoFlow Mac app, then try again.");
+    throw new Error(`PadKey Mac Control is offline. Launch the ${window.__PADKEY_NATIVE_APP__ ? "PadKey" : "OwoFlow"} Mac app, then try again.`);
   }
   const body = await response.json().catch(() => ({})) as T & { error?: { message?: string } };
   if (!response.ok) throw new Error(body.error?.message ?? "The Mac action could not be completed.");
@@ -119,7 +119,7 @@ export function AgentControlPanel() {
 
       <div className={`agent-availability ${online ? "is-online" : "is-offline"}`} role="status">
         <span className="status-dot" />
-        <div><b>{online ? "Mac Control ready" : "Mac Control offline"}</b><span>{online ? "OwoFlow is listening on this Mac." : "Open the OwoFlow Mac app to enable actions."}</span></div>
+        <div><b>{online ? "Mac Control ready" : "Mac Control offline"}</b><span>{online ? `${window.__PADKEY_NATIVE_APP__ ? "PadKey" : "OwoFlow"} is listening on this Mac.` : `Open the ${window.__PADKEY_NATIVE_APP__ ? "PadKey" : "OwoFlow"} Mac app to enable actions.`}</span></div>
       </div>
 
       <div className="agent-command-box">
