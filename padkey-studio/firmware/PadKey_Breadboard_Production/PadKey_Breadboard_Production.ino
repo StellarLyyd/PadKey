@@ -9,7 +9,7 @@
 
   Outputs:
     - USB: newline-delimited JSON, including Base64 PCM audio
-    - BLE: battery level + telemetry + continuous single-channel PCM
+    - BLE: battery + source telemetry + continuous single-channel G.711 mu-law
     - Wi-Fi (optional): JSON telemetry + efficient binary PCM over WebSocket
 
   PadKey Studio settings:
@@ -152,8 +152,8 @@ constexpr char kBleControlCharUuid[] = "7f23c003-2c44-4e7d-9f53-000000000001";
 constexpr uint16_t kBleMtu = 247;
 constexpr uint8_t kBleRecordSourceId = 1;         // MAX4466 by default.
 constexpr uint32_t kBleRecordSampleRate = 8000;
-constexpr size_t kBleAudioSamplesPerNotify = 80;  // 15 + 160 = 175 bytes total.
-constexpr uint32_t kBleTelemetryNotifyIntervalMs = 250;
+constexpr size_t kBleAudioSamplesPerNotify = 160; // 15 + 160 mu-law bytes = 175.
+constexpr uint32_t kBleTelemetryNotifyIntervalMs = 120;
 #endif
 
 }  // namespace Config
@@ -175,6 +175,7 @@ struct RuntimeState {
   bool piezoDcReady = false;
   int32_t max4466Peak = 0;
   int32_t piezoPeak = 0;
+  int32_t inmp441Peak = 0;
   int32_t inmp441Rms = 0;
   int32_t max4466Rms = 0;
   int32_t piezoRms = 0;
@@ -258,7 +259,8 @@ uint32_t bleAudioSequence = 0;
 uint8_t bleDecimationPhase = 0;
 size_t bleRecordBufferCount = 0;
 int16_t bleRecordBuffer[Config::kBleAudioSamplesPerNotify];
-uint8_t bleAudioPacket[15 + Config::kBleAudioSamplesPerNotify * sizeof(int16_t)];
+uint8_t bleAudioPacket[15 + Config::kBleAudioSamplesPerNotify];
+char bleTelemetryJson[192];
 #endif
 
 void setLed(bool on) {
@@ -690,6 +692,29 @@ class PadKeyBleServerCallbacks : public BLEServerCallbacks {
     sendStatus("info", "BLE client connected");
   }
 
+#if defined(CONFIG_BLUEDROID_ENABLED)
+  void onConnect(BLEServer* server, esp_ble_gatts_cb_param_t* parameters) override {
+    // Ask macOS for a short connection interval. The central may choose a
+    // different value, but this request substantially improves sustained
+    // notification delivery when it is accepted.
+    server->requestConnParams(
+        parameters->connect.remote_bda,
+        6,    // 7.5 ms minimum.
+        12,   // 15 ms maximum.
+        0,    // No skipped connection events.
+        400); // Four-second supervision timeout.
+  }
+#elif defined(CONFIG_NIMBLE_ENABLED)
+  void onConnect(BLEServer* server, ble_gap_conn_desc* description) override {
+    server->requestConnParams(
+        description->conn_handle,
+        6,
+        12,
+        0,
+        400);
+  }
+#endif
+
   void onDisconnect(BLEServer*) override {
     bleClientConnected = false;
     bleAdvertisingRestartNeeded = true;
@@ -802,9 +827,9 @@ void sendBleTelemetry(size_t jsonLength) {
     return;
   }
 
-  // Reserve most of the BLE connection interval for the continuous audio
-  // channel. Four telemetry updates per second are ample for meters and
-  // battery status without starving recordable 8 kHz audio notifications.
+  // Reserve most of the BLE connection interval for continuous audio. About eight
+  // compact, source-specific meter updates per second keep the graph responsive
+  // without the multi-notification JSON bursts used by USB and Wi-Fi.
   const uint32_t nowMs = millis();
   if (nowMs - lastBleTelemetryNotifyMs <
       Config::kBleTelemetryNotifyIntervalMs) {
@@ -812,26 +837,77 @@ void sendBleTelemetry(size_t jsonLength) {
   }
   lastBleTelemetryNotifyMs = nowMs;
 
-  // The complete telemetry object can exceed one ATT notification even with
-  // a negotiated 247-byte MTU. Send it as a newline-terminated byte stream;
-  // PadKey Studio reassembles the chunks before parsing the JSON object.
-  constexpr size_t kBleTelemetryChunkBytes = 180;
-  size_t offset = 0;
-  while (offset < jsonLength) {
-    const size_t chunkLength = min(
-        kBleTelemetryChunkBytes,
-        jsonLength - offset);
-    bleTelemetryCharacteristic->setValue(
-        reinterpret_cast<const uint8_t*>(&telemetryJson[offset]),
-        chunkLength);
-    bleTelemetryCharacteristic->notify();
-    offset += chunkLength;
-    delay(2);
+  const bool selectedDetected = bleRecordSourceId == 0
+      ? state.inmp441Peak > state.micGate
+      : bleRecordSourceId == 1
+          ? state.max4466Peak > Config::kMax4466Threshold
+          : state.piezoPeak > Config::kPiezoThreshold;
+
+  int written = 0;
+  if (bleRecordSourceId == 0) {
+    written = snprintf(
+        bleTelemetryJson,
+        sizeof(bleTelemetryJson),
+        "{\"type\":\"telemetry\",\"inmp441\":%ld,\"inmp441Rms\":%ld,"
+        "\"noiseFloor\":%ld,\"gate\":%ld,\"sourceId\":0,"
+        "\"sampleRate\":%lu,\"soundDetected\":%s}\n",
+        static_cast<long>(state.inmp441Peak),
+        static_cast<long>(state.inmp441Rms),
+        static_cast<long>(state.noiseFloor),
+        static_cast<long>(state.micGate),
+        static_cast<unsigned long>(Config::kBleRecordSampleRate),
+        selectedDetected ? "true" : "false");
+  } else if (bleRecordSourceId == 1) {
+    written = snprintf(
+        bleTelemetryJson,
+        sizeof(bleTelemetryJson),
+        "{\"type\":\"telemetry\",\"max4466\":%ld,\"max4466Rms\":%ld,"
+        "\"sourceId\":1,\"sampleRate\":%lu,\"soundDetected\":%s}\n",
+        static_cast<long>(state.max4466Peak),
+        static_cast<long>(state.max4466Rms),
+        static_cast<unsigned long>(Config::kBleRecordSampleRate),
+        selectedDetected ? "true" : "false");
+  } else {
+    written = snprintf(
+        bleTelemetryJson,
+        sizeof(bleTelemetryJson),
+        "{\"type\":\"telemetry\",\"piezo\":%ld,\"piezoRms\":%ld,"
+        "\"sourceId\":2,\"sampleRate\":%lu,\"soundDetected\":%s}\n",
+        static_cast<long>(state.piezoPeak),
+        static_cast<long>(state.piezoRms),
+        static_cast<unsigned long>(Config::kBleRecordSampleRate),
+        selectedDetected ? "true" : "false");
   }
 
-  static const uint8_t newline = '\n';
-  bleTelemetryCharacteristic->setValue(&newline, 1);
+  if (written <= 0 || static_cast<size_t>(written) >= sizeof(bleTelemetryJson)) {
+    return;
+  }
+  bleTelemetryCharacteristic->setValue(
+      reinterpret_cast<const uint8_t*>(bleTelemetryJson),
+      static_cast<size_t>(written));
   bleTelemetryCharacteristic->notify();
+}
+
+uint8_t linearPcmToMuLaw(int16_t sample) {
+  // ITU-T G.711 mu-law: 16-bit linear PCM becomes one logarithmic byte. Voice
+  // remains intelligible while BLE traffic is cut in half. Studio expands it
+  // back to signed 16-bit PCM before preview, processing, or export.
+  constexpr int32_t kBias = 0x84;
+  constexpr int32_t kClip = 32635;
+  static constexpr int32_t kSegmentEnd[8] = {
+      0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF, 0x3FFF, 0x7FFF};
+
+  int32_t magnitude = sample;
+  const uint8_t mask = magnitude < 0 ? 0x7F : 0xFF;
+  if (magnitude < 0) magnitude = -magnitude;
+  magnitude = min(magnitude, kClip) + kBias;
+
+  uint8_t segment = 0;
+  while (segment < 8 && magnitude > kSegmentEnd[segment]) segment += 1;
+  if (segment > 7) segment = 7;
+  const uint8_t encoded = static_cast<uint8_t>(
+      (segment << 4) | ((magnitude >> (segment + 3)) & 0x0F));
+  return encoded ^ mask;
 }
 
 void queueBleAudio(
@@ -857,19 +933,22 @@ void queueBleAudio(
     bleAudioPacket[1] = 'K';
     bleAudioPacket[2] = 'A';
     bleAudioPacket[3] = 'U';
-    bleAudioPacket[4] = 3;  // Continuous, recordable PCM.
+    bleAudioPacket[4] = 5;  // Continuous G.711 mu-law, decoded to PCM in Studio.
     bleAudioPacket[5] = 1;  // Mono.
     putUint32LittleEndian(&bleAudioPacket[6], Config::kBleRecordSampleRate);
     putUint32LittleEndian(&bleAudioPacket[10], bleAudioSequence++);
     bleAudioPacket[14] = bleRecordSourceId;
-    memcpy(
-        &bleAudioPacket[15],
-        bleRecordBuffer,
-        Config::kBleAudioSamplesPerNotify * sizeof(int16_t));
+    for (size_t sampleIndex = 0;
+         sampleIndex < Config::kBleAudioSamplesPerNotify;
+         sampleIndex += 1) {
+      bleAudioPacket[15 + sampleIndex] =
+          linearPcmToMuLaw(bleRecordBuffer[sampleIndex]);
+    }
 
     bleAudioCharacteristic->setValue(bleAudioPacket, sizeof(bleAudioPacket));
     bleAudioCharacteristic->notify();
     bleRecordBufferCount = 0;
+    delay(1);
   }
 }
 #else
@@ -1055,6 +1134,7 @@ void loop() {
   }
   state.inmp441Rms = static_cast<int32_t>(
       sqrt(static_cast<double>(inmp441SquareSum) / sampleCount));
+  state.inmp441Peak = blockPeak;
 
   collectAnalogSamples();
   const bool analogPacketReady =

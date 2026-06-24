@@ -25,6 +25,19 @@ function pcmBytesToSamples(buffer: ArrayBuffer, byteOffset = 0) {
   return samples;
 }
 
+function muLawBytesToSamples(buffer: ArrayBuffer, byteOffset: number) {
+  const bytes = new Uint8Array(buffer, byteOffset);
+  const samples = new Int16Array(bytes.length);
+  const bias = 0x84;
+  for (let index = 0; index < bytes.length; index += 1) {
+    const value = (~bytes[index]) & 0xff;
+    let magnitude = ((value & 0x0f) << 3) + bias;
+    magnitude <<= (value & 0x70) >> 4;
+    samples[index] = value & 0x80 ? bias - magnitude : magnitude - bias;
+  }
+  return samples;
+}
+
 function parseAudioChannel(value: unknown): AudioChannel {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (["max4466", "analog", "analogmic", "analog-mic"].includes(normalized)) return "max4466";
@@ -108,7 +121,8 @@ export function parseTransportLine(raw: string, source: TransportKind): Transpor
 // Version 3 adds a sensor id at byte 14 (0=INMP441, 1=MAX4466,
 // 2=piezo); PCM begins at byte 15. Version 4 uses the same framing for
 // legacy sparse BLE monitor audio, which must not be exported as a continuous
-// recording. Current firmware uses version 3 for recordable BLE audio.
+// recording. Version 5 carries G.711 mu-law samples for the current
+// bandwidth-efficient BLE stream; Studio expands them to signed 16-bit PCM.
 export function parseBinaryAudio(buffer: ArrayBuffer): AudioPacket | null {
   if (buffer.byteLength < 12) {
     return null;
@@ -119,14 +133,17 @@ export function parseBinaryAudio(buffer: ArrayBuffer): AudioPacket | null {
   const version = view.getUint8(4);
   const channels = view.getUint8(5);
   const sampleRate = view.getUint32(6, true);
-  if (magic !== "PKAU" || (version !== 1 && version !== 2 && version !== 3 && version !== 4) || channels !== 1 || sampleRate < 8000 || sampleRate > 96000) {
+  if (magic !== "PKAU" || ![1, 2, 3, 4, 5].includes(version) || channels !== 1 || sampleRate < 8000 || sampleRate > 96000) {
     return null;
   }
-  if ((version === 2 && buffer.byteLength < 16) || ((version === 3 || version === 4) && buffer.byteLength < 17)) return null;
+  if ((version === 2 && buffer.byteLength < 16) || (version >= 3 && buffer.byteLength < 17)) return null;
 
   const sequence = version >= 2 ? view.getUint32(10, true) : null;
-  const hasSensorId = version === 3 || version === 4;
+  const hasSensorId = version >= 3;
   const channel = hasSensorId ? parseAudioChannel(["inmp441", "max4466", "piezo"][view.getUint8(14)]) : "inmp441";
-  const samples = pcmBytesToSamples(buffer, hasSensorId ? 15 : version === 2 ? 14 : 10);
+  const payloadOffset = hasSensorId ? 15 : version === 2 ? 14 : 10;
+  const samples = version === 5
+    ? muLawBytesToSamples(buffer, payloadOffset)
+    : pcmBytesToSamples(buffer, payloadOffset);
   return samples.length ? { samples, sampleRate, channels: 1, channel, sequence, recordable: version !== 4, ts: Date.now() } : null;
 }

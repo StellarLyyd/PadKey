@@ -78,17 +78,17 @@ For Wi-Fi, the front end also accepts this binary packet:
 
 Binary WebSocket packets avoid Base64 expansion and are the preferred Wi-Fi audio path.
 
-## 4. BLE monitor packets
+## 4. BLE recording packets
 
 BLE advertises as `PadKey-S3` with custom service `7f23c000-2c44-4e7d-9f53-000000000001`.
 
 | Characteristic | UUID | Purpose |
 | --- | --- | --- |
-| Telemetry | `7f23c001-2c44-4e7d-9f53-000000000001` | Newline-terminated JSON, chunked across notifications |
-| Recordable audio | `7f23c002-2c44-4e7d-9f53-000000000001` | Continuous PCM from one selected source |
+| Telemetry | `7f23c001-2c44-4e7d-9f53-000000000001` | Compact source-specific JSON at about 8 Hz |
+| Recordable audio | `7f23c002-2c44-4e7d-9f53-000000000001` | Continuous G.711 μ-law from one selected source |
 | Control | `7f23c003-2c44-4e7d-9f53-000000000001` | Reserved device commands |
 
-BLE audio uses the PKAU header with protocol version `3`, one channel, an 8 kHz sample rate, consecutive packet sequence numbers, and the selected sensor id. Version 3 is recordable PCM. Legacy version 4 remains defined as preview-only and must not be appended to recordings.
+BLE audio uses the same 15-byte PKAU header with protocol version `5`, one channel, an 8 kHz sample rate, consecutive packet sequence numbers, and the selected sensor id. Each remaining byte is one G.711 μ-law sample. Studio immediately expands those bytes to signed 16-bit PCM, so waveform display, processing, WAV export, and MP3 export continue to use the normal audio pipeline. Version 5 halves BLE traffic and emits 50 audio notifications per second instead of approximately 100. Legacy version 4 remains preview-only and must not be appended to recordings.
 
 The control characteristic accepts UTF-8 JSON:
 

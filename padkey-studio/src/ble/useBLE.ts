@@ -42,9 +42,11 @@ async function writeControl(
   if (!characteristic) return;
   const payload = new TextEncoder().encode(JSON.stringify(message));
   const writable = characteristic as BluetoothRemoteGATTCharacteristic & {
-    writeValueWithoutResponse?: (value: BufferSource) => Promise<void>;
+    writeValueWithResponse?: (value: BufferSource) => Promise<void>;
   };
-  if (writable.writeValueWithoutResponse) await writable.writeValueWithoutResponse(payload);
+  // Source switches must be acknowledged before Studio updates its display;
+  // fire-and-forget writes could be lost while the audio characteristic was busy.
+  if (writable.writeValueWithResponse) await writable.writeValueWithResponse(payload);
   else await characteristic.writeValue(payload);
 }
 
@@ -187,8 +189,8 @@ export function useBLE(): BLEController {
   }, [activeSource, disconnect, handleAudio, handleBattery, handleDisconnect, handleTelemetry, setBatteryStatus, setBLEConnected, setBLEStatus]);
 
   const setSource = useCallback(async (sourceId: 0 | 1 | 2) => {
-    setBleStreamConfig(sourceId, 8000);
     await writeControl(controlRef.current, { type: "set_source", sourceId });
+    setBleStreamConfig(sourceId, 8000);
   }, [setBleStreamConfig]);
 
   const setStreaming = useCallback(async (enabled: boolean) => {
