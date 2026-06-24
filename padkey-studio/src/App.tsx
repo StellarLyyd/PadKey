@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, Battery, BatteryCharging, Bluetooth, Cable, Radio, Settings2, Wifi } from "lucide-react";
 import { useMacMicrophone } from "./audio/useMacMicrophone";
+import { bleSourceChannel } from "./ble/bleProtocol";
 import { useBLE } from "./ble/useBLE";
 import { CapturePanel } from "./components/capture/CapturePanel";
 import { CaptureProfilePanel } from "./components/capture/CaptureProfilePanel";
@@ -37,6 +38,7 @@ export function App() {
   const serialConnected = useAppStore((state) => state.serialConnected);
   const wifiConnected = useAppStore((state) => state.wifiConnected);
   const bleConnected = useAppStore((state) => state.bleConnected);
+  const bleActiveSource = useAppStore((state) => state.bleActiveSource);
   const serialBaudRate = useAppStore((state) => state.serialBaudRate);
   const batteryPercent = useAppStore((state) => state.batteryPercent);
   const batteryVoltage = useAppStore((state) => state.batteryVoltage);
@@ -58,9 +60,11 @@ export function App() {
   const connected = serialConnected || wifiConnected || bleConnected;
   const source = latestFrame?.source === "wifi" ? "Wi-Fi" : latestFrame?.source === "serial" ? "USB" : latestFrame?.source === "ble" ? "BLE" : serialConnected ? "USB" : wifiConnected ? "Wi-Fi" : bleConnected ? "BLE" : "Offline";
   const recentFrame = Boolean(latestFrame && now - latestFrame.ts < 2000);
-  const rawAudioLive = (["inmp441", "max4466", "piezo"] as const)
+  const bleChannel = bleSourceChannel(bleActiveSource);
+  const deviceChannels = (["inmp441", "max4466", "piezo"] as const);
+  const rawAudioLive = (bleConnected ? [bleChannel] : deviceChannels)
     .some((channel) => Boolean(channelLastAudioPacketAt[channel] && now - (channelLastAudioPacketAt[channel] ?? 0) < 2000));
-  const recordableAudioLive = (["inmp441", "max4466", "piezo"] as const)
+  const recordableAudioLive = (bleConnected ? [bleChannel] : deviceChannels)
     .some((channel) => Boolean(channelLastRecordableAudioPacketAt[channel] && now - (channelLastRecordableAudioPacketAt[channel] ?? 0) < 2000));
   const micValue = latestFrame?.mic ?? 0;
   const max4466Value = latestFrame?.max4466 ?? 0;
@@ -136,25 +140,25 @@ export function App() {
                     <div>
                       <div className="section-kicker">Live signal</div>
                       <h1 id="signal-title" className="workspace-title">Microphones + contact vibration</h1>
-                      <p className="panel-copy">INMP441, MAX4466, and piezo values from the XIAO ESP32-S3.</p>
+                      <p className="panel-copy">{bleConnected ? `${bleChannel === "inmp441" ? "INMP441" : bleChannel === "max4466" ? "MAX4466" : "Piezo"} is the selected BLE input.` : "INMP441, MAX4466, and piezo values from the XIAO ESP32-S3."}</p>
                     </div>
                     <div className="legend" aria-label="Chart legend">
-                      <span><i className="legend-line mic-line" /> Microphone</span>
-                      <span><i className="legend-line max4466-line" /> MAX4466</span>
-                      <span><i className="legend-line piezo-line" /> Piezo</span>
-                      <span><i className="legend-line noise-line" /> Noise floor</span>
-                      <span><i className="legend-line threshold-line" /> Adaptive gate</span>
+                      {(!bleConnected || bleChannel === "inmp441") ? <span><i className="legend-line mic-line" /> INMP441</span> : null}
+                      {(!bleConnected || bleChannel === "max4466") ? <span><i className="legend-line max4466-line" /> MAX4466</span> : null}
+                      {(!bleConnected || bleChannel === "piezo") ? <span><i className="legend-line piezo-line" /> Piezo</span> : null}
+                      {(!bleConnected || bleChannel === "inmp441") ? <span><i className="legend-line noise-line" /> Noise floor</span> : null}
+                      {(!bleConnected || bleChannel === "inmp441") ? <span><i className="legend-line threshold-line" /> Adaptive gate</span> : null}
                     </div>
                   </div>
 
                   <div className="metric-row">
-                    <Metric label="INMP441 peak" value={micValue.toLocaleString()} detail={`${micValue > micThreshold ? "Above" : "Below"} ${micThreshold.toLocaleString()} gate${noiseFloor ? ` · floor ${noiseFloor.toLocaleString()}` : ""}`} tone="mic" />
-                    <Metric label="MAX4466 peak" value={max4466Value.toLocaleString()} detail="Analog microphone on A5" />
-                    <Metric label="Piezo" value={piezoValue.toLocaleString()} detail={`${piezoValue > piezoThreshold ? "Above" : "Below"} ${piezoThreshold.toLocaleString()} threshold`} tone="piezo" />
+                    <Metric label="INMP441 peak" value={bleConnected && bleChannel !== "inmp441" ? "—" : micValue.toLocaleString()} detail={bleConnected && bleChannel !== "inmp441" ? "Not streamed over BLE" : `${micValue > micThreshold ? "Above" : "Below"} ${micThreshold.toLocaleString()} gate${noiseFloor ? ` · floor ${noiseFloor.toLocaleString()}` : ""}`} tone="mic" />
+                    <Metric label="MAX4466 peak" value={bleConnected && bleChannel !== "max4466" ? "—" : max4466Value.toLocaleString()} detail={bleConnected && bleChannel !== "max4466" ? "Not streamed over BLE" : "Analog microphone on A5"} />
+                    <Metric label="Piezo" value={bleConnected && bleChannel !== "piezo" ? "—" : piezoValue.toLocaleString()} detail={bleConnected && bleChannel !== "piezo" ? "Not streamed over BLE" : `${piezoValue > piezoThreshold ? "Above" : "Below"} ${piezoThreshold.toLocaleString()} threshold`} tone="piezo" />
                     <Metric label="Detection" value={detected ? "ACTIVE" : "QUIET"} detail={recentFrame ? `${fps} frames/sec · ${source}` : "Waiting for live frames"} tone={detected ? "detected" : "neutral"} />
                   </div>
 
-                  <SignalChart frames={frameHistory} />
+                  <SignalChart frames={frameHistory} lockedChannel={bleConnected ? bleChannel : undefined} />
                   <div className="chart-footer">
                     <span><Activity size={14} aria-hidden="true" /> 120-frame rolling window</span>
                     <span>Noise floor and adaptive gate come directly from firmware</span>

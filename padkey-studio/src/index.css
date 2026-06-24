@@ -186,8 +186,10 @@ audio:focus-visible {
 .signal-channel-toggles { min-height: 52px; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 8px 20px 0; }
 .signal-channel-toggles button { min-height: 36px; display: inline-flex; align-items: center; gap: 7px; padding: 0 11px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); background: var(--canvas); font-size: 11px; font-weight: 600; }
 .signal-channel-toggles button.is-active { color: var(--ink); border-color: rgba(24,29,38,.2); background: var(--soft); }
+.signal-channel-toggles button:disabled { cursor: default; opacity: 1; }
 .signal-channel-toggles button span { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .35; }
 .signal-channel-toggles button.is-active span { opacity: 1; }
+.signal-channel-toggles small { color: var(--muted); font-size: 10px; }
 .empty-chart { position: absolute; inset: 20px; display: grid; align-content: center; justify-items: center; overflow: hidden; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); text-align: center; }
 .empty-chart-line { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: var(--soft-border); }
 .empty-chart strong, .empty-chart span { position: relative; padding: 3px 10px; background: var(--canvas); }

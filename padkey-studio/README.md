@@ -76,7 +76,7 @@ USB and Wi-Fi use the same channel-aware stream contract documented in [PADKEY_S
 
 BLE is enabled by default in the production firmware and advertises as `PadKey-S3`. Install the XIAO's external antenna, choose **Connect PadKey → BLE**, and select `PadKey-S3` in Chrome or Edge.
 
-BLE carries telemetry, battery level, and one continuous 8 kHz recording channel. Choose INMP441, MAX4466, or piezo before recording. USB and Wi-Fi can carry all three 16 kHz channels at once.
+BLE carries source-specific telemetry, battery level, and one continuous 8 kHz recording channel. Choose INMP441, MAX4466, or piezo before recording. The radio uses G.711 μ-law to reduce lag; Studio reconstructs signed 16-bit PCM before playback, processing, and export. USB and Wi-Fi can carry all three 16 kHz channels at once.
 
 ## Test without hardware
 

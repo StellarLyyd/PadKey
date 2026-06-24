@@ -10,13 +10,20 @@ import {
 } from "chart.js";
 import type { ChartData, ChartOptions } from "chart.js";
 import { Line } from "react-chartjs-2";
-import type { SensorFrame } from "../../types";
+import type { AudioChannel, SensorFrame } from "../../types";
 
 ChartJS.register(CategoryScale, LinearScale, LineController, LineElement, PointElement, Tooltip);
 
-export function SignalChart({ frames }: { frames: SensorFrame[] }) {
+export function SignalChart({ frames, lockedChannel }: { frames: SensorFrame[]; lockedChannel?: Exclude<AudioChannel, "macbook"> }) {
   const [channels, setChannels] = useState({ inmp441: true, max4466: true, piezo: true });
   const visible = frames.slice(-120);
+  const effectiveChannels = lockedChannel
+    ? {
+        inmp441: lockedChannel === "inmp441",
+        max4466: lockedChannel === "max4466",
+        piezo: lockedChannel === "piezo"
+      }
+    : channels;
   const data = useMemo<ChartData<"line">>(() => ({
     labels: visible.map((_, index) => String(index + 1)),
     datasets: [
@@ -29,7 +36,7 @@ export function SignalChart({ frames }: { frames: SensorFrame[] }) {
         pointRadius: 0,
         tension: 0.18,
         yAxisID: "mic",
-        hidden: !channels.inmp441
+        hidden: !effectiveChannels.inmp441
       },
       {
         label: "Adaptive gate",
@@ -39,7 +46,7 @@ export function SignalChart({ frames }: { frames: SensorFrame[] }) {
         borderWidth: 1,
         pointRadius: 0,
         yAxisID: "mic",
-        hidden: !channels.inmp441
+        hidden: !effectiveChannels.inmp441
       },
       {
         label: "Noise floor",
@@ -49,7 +56,7 @@ export function SignalChart({ frames }: { frames: SensorFrame[] }) {
         borderWidth: 1,
         pointRadius: 0,
         yAxisID: "mic",
-        hidden: !channels.inmp441
+        hidden: !effectiveChannels.inmp441
       },
       {
         label: "MAX4466 peak",
@@ -60,7 +67,7 @@ export function SignalChart({ frames }: { frames: SensorFrame[] }) {
         pointRadius: 0,
         tension: 0.18,
         yAxisID: "mic",
-        hidden: !channels.max4466
+        hidden: !effectiveChannels.max4466
       },
       {
         label: "Piezo",
@@ -71,7 +78,7 @@ export function SignalChart({ frames }: { frames: SensorFrame[] }) {
         pointRadius: 0,
         tension: 0.18,
         yAxisID: "piezo",
-        hidden: !channels.piezo
+        hidden: !effectiveChannels.piezo
       },
       {
         label: "Piezo threshold",
@@ -81,10 +88,10 @@ export function SignalChart({ frames }: { frames: SensorFrame[] }) {
         borderWidth: 1,
         pointRadius: 0,
         yAxisID: "piezo",
-        hidden: !channels.piezo
+        hidden: !effectiveChannels.piezo
       }
     ]
-  }), [channels, visible]);
+  }), [effectiveChannels.inmp441, effectiveChannels.max4466, effectiveChannels.piezo, visible]);
 
   const options = useMemo<ChartOptions<"line">>(() => ({
     responsive: true,
@@ -131,11 +138,12 @@ export function SignalChart({ frames }: { frames: SensorFrame[] }) {
           ["inmp441", "INMP441"],
           ["max4466", "MAX4466"],
           ["piezo", "Piezo"]
-        ] as const).map(([key, label]) => (
-          <button type="button" key={key} className={channels[key] ? "is-active" : ""} aria-pressed={channels[key]} onClick={() => setChannels((current) => ({ ...current, [key]: !current[key] }))}>
+        ] as const).filter(([key]) => !lockedChannel || key === lockedChannel).map(([key, label]) => (
+          <button type="button" key={key} className={effectiveChannels[key] ? "is-active" : ""} aria-pressed={effectiveChannels[key]} disabled={Boolean(lockedChannel)} onClick={() => setChannels((current) => ({ ...current, [key]: !current[key] }))}>
             <span /> {label}
           </button>
         ))}
+        {lockedChannel ? <small>BLE displays only the selected wireless input.</small> : null}
       </div>
       <div className="chart-stage">
         {visible.length ? <Line data={data} options={options} /> : (

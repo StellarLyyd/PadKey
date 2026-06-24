@@ -12,7 +12,7 @@ Target: Seeed Studio XIAO ESP32-S3 with three independent sensor channels, batte
 - BLE telemetry, battery level, and one continuous 8 kHz recording channel as `PadKey-S3`
 - optional Wi-Fi WebSocket full-waveform streaming
 
-BLE streams one selected sensor continuously so the browser can create playable WAV/MP3 recordings without saturating the wireless link. MAX4466 is the default; Studio can switch the source to INMP441 or piezo. USB and Wi-Fi remain the multi-channel paths.
+BLE streams one selected sensor continuously so the browser can create playable WAV/MP3 recordings without saturating the wireless link. It sends 8 kHz G.711 μ-law over the radio at 50 audio notifications per second; Studio expands that stream to signed 16-bit PCM before playback or export. MAX4466 is the default; Studio can switch the source to INMP441 or piezo. USB and Wi-Fi remain the multi-channel paths.
 
 ## Arduino IDE settings
 
