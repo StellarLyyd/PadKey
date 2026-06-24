@@ -38,7 +38,11 @@ function frameFromJson(raw: string): SensorFrame | null {
     const noiseFloor = Number(value.noiseFloor ?? 0);
     const thresholdMic = Number(value.gate ?? value.thresholdMic ?? value.micThreshold ?? 1800);
     const thresholdPiezo = Number(value.thresholdPiezo ?? value.piezoThreshold ?? 100);
-    if (![mic, max4466, piezo, noiseFloor, thresholdMic, thresholdPiezo].every(Number.isFinite)) {
+    const batteryVoltage = Number(value.batteryVoltage ?? 0);
+    const batteryPercent = Number(value.batteryPercent ?? value.bat ?? 0);
+    const rawPowerMode = String(value.powerMode ?? "unknown");
+    const powerMode = rawPowerMode === "battery" || rawPowerMode === "usb_or_charging" ? rawPowerMode : "unknown";
+    if (![mic, max4466, piezo, noiseFloor, thresholdMic, thresholdPiezo, batteryVoltage, batteryPercent].every(Number.isFinite)) {
       return null;
     }
 
@@ -50,8 +54,11 @@ function frameFromJson(raw: string): SensorFrame | null {
       pz2: Number(value.pz2 ?? 0),
       mus: Number(value.mus ?? 0),
       ext: Number(value.ext ?? 0),
-      bat: Number(value.bat ?? 0),
-      batState: String(value.batState ?? "OK"),
+      bat: Math.max(0, Math.min(100, batteryPercent)),
+      batState: powerMode === "battery" ? "BATTERY" : powerMode === "usb_or_charging" ? "POWERED" : String(value.batState ?? "OK"),
+      batteryVoltage,
+      batteryPercent: Math.max(0, Math.min(100, Math.round(batteryPercent))),
+      powerMode,
       piezo,
       noiseFloor,
       thresholdMic,
@@ -105,6 +112,9 @@ export function parseFrame(raw: string): SensorFrame | null {
     ext: ext ?? 0,
     bat: bat ?? 0,
     batState: state ?? "OK",
+    batteryVoltage: 0,
+    batteryPercent: Math.max(0, Math.min(100, bat ?? 0)),
+    powerMode: "unknown",
     piezo,
     noiseFloor,
     thresholdMic,

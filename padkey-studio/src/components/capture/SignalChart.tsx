@@ -142,7 +142,7 @@ export function SignalChart({ frames }: { frames: SensorFrame[] }) {
           <div className="empty-chart">
             <div className="empty-chart-line" aria-hidden="true" />
             <strong>Waiting for your first sensor frame</strong>
-            <span>Connect the XIAO ESP32-S3 over USB or Wi-Fi.</span>
+            <span>Connect the XIAO ESP32-S3 over USB, BLE, or Wi-Fi.</span>
           </div>
         )}
       </div>

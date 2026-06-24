@@ -32,8 +32,8 @@ const howSteps = [
     note: "Firmware decides whether the frontend receives only summary telemetry or the complete PCM waveform."
   },
   {
-    title: "USB or Wi-Fi transports the stream",
-    body: "Web Serial reads newline-delimited messages over a cable. A WebSocket carries the same telemetry and can carry efficient binary PCM over Wi-Fi.",
+    title: "USB, BLE, or Wi-Fi transports the stream",
+    body: "USB and Wi-Fi carry continuous recording audio. BLE saves power while carrying telemetry, battery status, and waveform snapshots.",
     note: "Sequence numbers let the frontend detect missing PCM packets."
   },
   {
@@ -74,7 +74,7 @@ function HowItWorks() {
           <ArrowRight className="flow-arrow-horizontal arrow-one" size={18} aria-hidden="true" />
           <div className="flow-node firmware-node"><SlidersHorizontal size={18} aria-hidden="true" /><b>ESP32 firmware</b><span>Sample + packetize</span></div>
           <ArrowRight className="flow-arrow-horizontal arrow-two" size={18} aria-hidden="true" />
-          <div className="flow-node transport-node"><Cable size={18} aria-hidden="true" /><b>Transport</b><span>USB or Wi-Fi</span></div>
+          <div className="flow-node transport-node"><Cable size={18} aria-hidden="true" /><b>Transport</b><span>USB, BLE, or Wi-Fi</span></div>
           <ArrowRight className="flow-arrow-horizontal arrow-three" size={18} aria-hidden="true" />
           <div className="flow-node browser-node"><Database size={18} aria-hidden="true" /><b>Browser capture</b><span>Buffer + record</span></div>
         </div>

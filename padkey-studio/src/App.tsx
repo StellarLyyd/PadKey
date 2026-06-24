@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, Cable, Radio, Settings2, Wifi } from "lucide-react";
+import { Activity, Battery, BatteryCharging, Bluetooth, Cable, Radio, Settings2, Wifi } from "lucide-react";
 import { useMacMicrophone } from "./audio/useMacMicrophone";
+import { useBLE } from "./ble/useBLE";
 import { CapturePanel } from "./components/capture/CapturePanel";
 import { CaptureProfilePanel } from "./components/capture/CaptureProfilePanel";
 import { ConnectionPanel } from "./components/capture/ConnectionPanel";
@@ -10,7 +11,9 @@ import { LearnHub } from "./components/learn/LearnHub";
 import { SpeechLab } from "./components/speech/SpeechLab";
 import { Studio } from "./components/studio/Studio";
 import { SignalTrainingLab } from "./components/training/SignalTrainingLab";
+import { useSerial } from "./serial/useSerial";
 import { useAppStore } from "./store";
+import { useWifi } from "./wifi/useWifi";
 
 type AdvancedView = "signals" | "trainer" | "speech" | "learn";
 
@@ -33,9 +36,18 @@ export function App() {
   const frameHistory = useAppStore((state) => state.frameHistory);
   const serialConnected = useAppStore((state) => state.serialConnected);
   const wifiConnected = useAppStore((state) => state.wifiConnected);
+  const bleConnected = useAppStore((state) => state.bleConnected);
+  const serialBaudRate = useAppStore((state) => state.serialBaudRate);
+  const batteryPercent = useAppStore((state) => state.batteryPercent);
+  const batteryVoltage = useAppStore((state) => state.batteryVoltage);
+  const powerMode = useAppStore((state) => state.powerMode);
   const sessionRecording = useAppStore((state) => state.sessionRecording);
   const channelLastAudioPacketAt = useAppStore((state) => state.channelLastAudioPacketAt);
+  const channelLastRecordableAudioPacketAt = useAppStore((state) => state.channelLastRecordableAudioPacketAt);
   const droppedAudioPackets = useAppStore((state) => state.droppedAudioPackets);
+  const serial = useSerial(serialBaudRate);
+  const wifi = useWifi();
+  const ble = useBLE();
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 500);
@@ -43,11 +55,13 @@ export function App() {
   }, []);
 
   const fps = useMemo(() => frameHistory.filter((frame) => frame.ts >= now - 1000).length, [frameHistory, now]);
-  const connected = serialConnected || wifiConnected;
-  const source = latestFrame?.source === "wifi" ? "Wi-Fi" : latestFrame?.source === "serial" ? "USB" : serialConnected ? "USB" : wifiConnected ? "Wi-Fi" : "Offline";
+  const connected = serialConnected || wifiConnected || bleConnected;
+  const source = latestFrame?.source === "wifi" ? "Wi-Fi" : latestFrame?.source === "serial" ? "USB" : latestFrame?.source === "ble" ? "BLE" : serialConnected ? "USB" : wifiConnected ? "Wi-Fi" : bleConnected ? "BLE" : "Offline";
   const recentFrame = Boolean(latestFrame && now - latestFrame.ts < 2000);
   const rawAudioLive = (["inmp441", "max4466", "piezo"] as const)
     .some((channel) => Boolean(channelLastAudioPacketAt[channel] && now - (channelLastAudioPacketAt[channel] ?? 0) < 2000));
+  const recordableAudioLive = (["inmp441", "max4466", "piezo"] as const)
+    .some((channel) => Boolean(channelLastRecordableAudioPacketAt[channel] && now - (channelLastRecordableAudioPacketAt[channel] ?? 0) < 2000));
   const micValue = latestFrame?.mic ?? 0;
   const max4466Value = latestFrame?.max4466 ?? 0;
   const piezoValue = latestFrame?.piezo ?? 0;
@@ -57,9 +71,11 @@ export function App() {
   const detected = Boolean(latestFrame?.soundDetected && recentFrame);
   const statusLabel = !connected
     ? "PadKey not connected"
+    : bleConnected
+      ? rawAudioLive ? "PadKey connected · BLE preview" : "PadKey connected · BLE signal"
     : droppedAudioPackets
       ? "PadKey connected · Check signal"
-      : rawAudioLive
+      : recordableAudioLive
         ? "PadKey connected · Signal good"
         : recentFrame
           ? "PadKey connected · Recording unavailable"
@@ -81,14 +97,20 @@ export function App() {
         </nav>
         <div className="header-statuses" aria-label="PadKey status">
           <div className={`header-status studio-header-status ${connected ? "is-live" : ""}`}>
-            {serialConnected ? <Cable size={15} aria-hidden="true" /> : wifiConnected ? <Wifi size={15} aria-hidden="true" /> : <Radio size={15} aria-hidden="true" />}
+            {serialConnected ? <Cable size={15} aria-hidden="true" /> : wifiConnected ? <Wifi size={15} aria-hidden="true" /> : bleConnected ? <Bluetooth size={15} aria-hidden="true" /> : <Radio size={15} aria-hidden="true" />}
             <span>{statusLabel}</span>
           </div>
+          {batteryPercent !== null ? (
+            <div className={`header-status battery-status ${powerMode === "usb_or_charging" ? "is-charging" : ""}`} title={batteryVoltage ? `${batteryVoltage.toFixed(2)} V estimated` : "Battery estimate"}>
+              {powerMode === "usb_or_charging" ? <BatteryCharging size={15} aria-hidden="true" /> : <Battery size={15} aria-hidden="true" />}
+              <span>{powerMode === "usb_or_charging" ? "External power" : `${batteryPercent}%`}</span>
+            </div>
+          ) : null}
           {sessionRecording ? <div className="recording-chip"><span /> Recording</div> : null}
         </div>
       </header>
 
-      {area === "studio" ? <Studio macMicrophone={macMicrophone} /> : (
+      {area === "studio" ? <Studio macMicrophone={macMicrophone} serial={serial} wifi={wifi} ble={ble} /> : (
         <>
           <nav className="advanced-tabs" aria-label="Advanced workspace">
             {([
@@ -102,7 +124,7 @@ export function App() {
           </nav>
           <div className={advancedView === "learn" ? "workspace is-learn" : "workspace"}>
             <aside className="control-rail">
-              <ConnectionPanel />
+              <ConnectionPanel serial={serial} wifi={wifi} ble={ble} />
               <CaptureProfilePanel />
               <FirmwareBoundary />
             </aside>
@@ -144,7 +166,7 @@ export function App() {
           </div>
 
           <footer className="app-footer mono">
-            <span className={recentFrame ? "footer-live" : ""}><i /> {recentFrame ? `Receiving ${fps} fps from ${source}` : connected ? "Connected; waiting for telemetry" : "Ready for USB or Wi-Fi"}</span>
+            <span className={recentFrame ? "footer-live" : ""}><i /> {recentFrame ? `Receiving ${fps} fps from ${source}` : connected ? "Connected; waiting for telemetry" : "Ready for USB, BLE, or Wi-Fi"}</span>
             <span>PadKey protocol · PCM S16LE mono · 16 kHz target</span>
           </footer>
         </>

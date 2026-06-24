@@ -14,6 +14,9 @@ export interface SensorFrame {
   ext: number;
   bat: number;
   batState: string;
+  batteryVoltage: number;
+  batteryPercent: number;
+  powerMode: "battery" | "usb_or_charging" | "unknown";
   piezo: number;
   noiseFloor: number;
   thresholdMic: number;
@@ -29,6 +32,7 @@ export interface AudioPacket {
   channels: 1;
   channel: AudioChannel;
   sequence: number | null;
+  recordable: boolean;
   ts: number;
 }
 
@@ -57,7 +61,7 @@ export interface SegmentTranscript {
   words: TranscriptWord[];
 }
 
-export type TransportKind = "serial" | "wifi";
+export type TransportKind = "serial" | "wifi" | "ble";
 export type TransportStatus = "idle" | "connecting" | "connected" | "error";
 
 export interface DeviceStatusMessage {

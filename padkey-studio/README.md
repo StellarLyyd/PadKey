@@ -4,9 +4,10 @@ PadKey Studio is the browser workspace for recording, improving, reviewing, and 
 
 ## What it does
 
-- Connects to a XIAO ESP32-S3 over a USB cable or Wi-Fi WebSocket.
+- Connects to a XIAO ESP32-S3 over USB, low-power BLE, or a Wi-Fi WebSocket.
 - Records separate waveform channels from the INMP441 digital microphone, MAX4466 analog microphone, and protected piezo contact sensor.
 - Can record the MacBook's built-in microphone as a baseline channel for comparison.
+- Displays the Charger BFF battery estimate and whether the board appears battery- or externally powered.
 - Shows live and recorded waveforms with independent channel selection and visibility controls.
 - Imports WAV or MP3 recordings up to 100 MB or ten minutes.
 - Applies non-destructive **Reduce noise**, **Clarity**, **Voice strength**, and **Loudness** adjustments with Natural, Clear, and Strong presets.
@@ -71,6 +72,12 @@ ws://padkey.local:81
 
 USB and Wi-Fi use the same channel-aware stream contract documented in [PADKEY_STREAM_PROTOCOL.md](./PADKEY_STREAM_PROTOCOL.md).
 
+## Connect over BLE
+
+BLE is enabled by default in the production firmware and advertises as `PadKey-S3`. Install the XIAO's external antenna, choose **Connect PadKey → BLE**, and select `PadKey-S3` in Chrome or Edge.
+
+BLE carries sensor telemetry, battery level, and low-power waveform snapshots. Those snapshots are deliberately not treated as continuous audio, so Studio will not export them as a misleading WAV or MP3. Choose USB or Wi-Fi for playable PadKey recordings.
+
 ## Test without hardware
 
 Run the included mock PadKey in a second terminal:
@@ -117,7 +124,7 @@ The signal trainer recognizes only phrases represented in its labeled training b
 - Target board: Seeed Studio XIAO ESP32-S3
 - PadKey waveform format: mono signed 16-bit PCM at 16 kHz
 - Sensors: INMP441 over I2S, MAX4466 on A5, protected piezo input on A8
-- Bluetooth is intentionally outside this revision.
+- BLE is the low-power monitoring path; USB and Wi-Fi are the continuous recording paths.
 - Do not connect an unprotected piezo directly to the ESP32-S3 analog input. Follow the protection guidance in the firmware README.
 
 See [PADKEY_STREAM_PROTOCOL.md](./PADKEY_STREAM_PROTOCOL.md) for packet formats and [FRONTEND_SIX_CHANNEL_CAPTURE_CODE.md](./FRONTEND_SIX_CHANNEL_CAPTURE_CODE.md) for additional capture notes.

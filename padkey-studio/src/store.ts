@@ -29,6 +29,9 @@ interface AppState {
   bleDeviceName: string | null;
   bleStatus: "idle" | "connecting" | "connected" | "error";
   bleError: string | null;
+  batteryVoltage: number | null;
+  batteryPercent: number | null;
+  powerMode: "battery" | "usb_or_charging" | "unknown";
   serialConnected: boolean;
   serialDeviceName: string | null;
   serialStatus: "idle" | "connecting" | "connected" | "error";
@@ -68,6 +71,7 @@ interface AppState {
   channelAudioPreviews: AudioChannelMap<Int16Array>;
   channelAudioSampleCounts: AudioChannelMap<number>;
   channelLastAudioPacketAt: AudioChannelMap<number | null>;
+  channelLastRecordableAudioPacketAt: AudioChannelMap<number | null>;
   channelLastAudioSequence: AudioChannelMap<number | null>;
   audioSampleRate: number | null;
   audioSampleCount: number;
@@ -95,6 +99,7 @@ interface AppState {
   setSelectedWord: (w: string) => void;
   setBLEConnected: (v: boolean, name?: string) => void;
   setBLEStatus: (status: "idle" | "connecting" | "connected" | "error", error?: string | null) => void;
+  setBatteryStatus: (percent: number | null, voltage?: number | null, powerMode?: "battery" | "usb_or_charging" | "unknown") => void;
   setSerialConnected: (v: boolean, name?: string) => void;
   setSerialStatus: (status: "idle" | "connecting" | "connected" | "error", error?: string | null) => void;
   setSerialBaudRate: (baudRate: number) => void;
@@ -129,6 +134,9 @@ export const useAppStore = create<AppState>((set) => ({
   bleDeviceName: null,
   bleStatus: "idle",
   bleError: null,
+  batteryVoltage: null,
+  batteryPercent: null,
+  powerMode: "unknown",
   serialConnected: false,
   serialDeviceName: null,
   serialStatus: "idle",
@@ -168,6 +176,7 @@ export const useAppStore = create<AppState>((set) => ({
   channelAudioPreviews: createAudioChannelMap(() => new Int16Array(0)),
   channelAudioSampleCounts: createAudioChannelMap(() => 0),
   channelLastAudioPacketAt: createAudioChannelMap(() => null),
+  channelLastRecordableAudioPacketAt: createAudioChannelMap(() => null),
   channelLastAudioSequence: createAudioChannelMap(() => null),
   audioSampleRate: null,
   audioSampleCount: 0,
@@ -234,6 +243,9 @@ export const useAppStore = create<AppState>((set) => ({
       return {
         latestFrame: frame,
         frameHistory,
+        batteryVoltage: frame.batteryVoltage > 0 ? frame.batteryVoltage : state.batteryVoltage,
+        batteryPercent: frame.powerMode !== "unknown" ? frame.batteryPercent : state.batteryPercent,
+        powerMode: frame.powerMode !== "unknown" ? frame.powerMode : state.powerMode,
         samples,
         activeBatchCapture,
         signalBatches,
@@ -247,13 +259,13 @@ export const useAppStore = create<AppState>((set) => ({
       if (packet.channel === "inmp441") livePcmRing.push(packet.samples);
       let droppedAudioPackets = state.droppedAudioPackets;
       const previousSequence = state.channelLastAudioSequence[packet.channel];
-      if (packet.sequence !== null && previousSequence !== null) {
+      if (packet.recordable && packet.sequence !== null && previousSequence !== null) {
         const expected = (previousSequence + 1) >>> 0;
         const difference = (packet.sequence - expected) >>> 0;
         if (difference > 0 && difference < 100000) droppedAudioPackets += difference;
       }
 
-      const shouldCapture = state.sessionRecording && state.captureChannels[packet.channel];
+      const shouldCapture = packet.recordable && state.sessionRecording && state.captureChannels[packet.channel];
       const nextChannelChunks = shouldCapture
         ? { ...state.channelAudioChunks, [packet.channel]: [...state.channelAudioChunks[packet.channel], packet.samples] }
         : state.channelAudioChunks;
@@ -270,7 +282,12 @@ export const useAppStore = create<AppState>((set) => ({
         channelAudioChunks: nextChannelChunks,
         channelAudioSampleCounts: nextChannelCounts,
         channelLastAudioPacketAt: { ...state.channelLastAudioPacketAt, [packet.channel]: packet.ts },
-        channelLastAudioSequence: { ...state.channelLastAudioSequence, [packet.channel]: packet.sequence },
+        channelLastRecordableAudioPacketAt: packet.recordable
+          ? { ...state.channelLastRecordableAudioPacketAt, [packet.channel]: packet.ts }
+          : state.channelLastRecordableAudioPacketAt,
+        channelLastAudioSequence: packet.recordable
+          ? { ...state.channelLastAudioSequence, [packet.channel]: packet.sequence }
+          : state.channelLastAudioSequence,
         audioSampleRate: packet.sampleRate,
         audioChunks: shouldCapture && packet.channel === "inmp441" ? [...state.audioChunks, packet.samples] : state.audioChunks,
         audioSampleCount: shouldCapture && packet.channel === "inmp441" ? state.audioSampleCount + packet.samples.length : state.audioSampleCount,
@@ -346,7 +363,7 @@ export const useAppStore = create<AppState>((set) => ({
   setBLEConnected: (bleConnected, name) =>
     set({
       bleConnected,
-      bleDeviceName: bleConnected ? name ?? "OWO-SensorNode" : null,
+      bleDeviceName: bleConnected ? name ?? "PadKey-S3" : null,
       bleStatus: bleConnected ? "connected" : "idle",
       bleError: bleConnected ? null : null
     }),
@@ -354,9 +371,14 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({
       bleStatus,
       bleError,
-      bleConnected: bleStatus === "connected" ? state.bleConnected : bleStatus === "connecting" ? false : state.bleConnected,
+      bleConnected: bleStatus === "connected" ? state.bleConnected : false,
       bleDeviceName: bleStatus === "error" || bleStatus === "idle" ? (state.bleConnected ? state.bleDeviceName : null) : state.bleDeviceName
     })),
+  setBatteryStatus: (batteryPercent, batteryVoltage = null, powerMode = "unknown") => set((state) => ({
+    batteryPercent: batteryPercent === null ? state.batteryPercent : Math.max(0, Math.min(100, Math.round(batteryPercent))),
+    batteryVoltage: batteryVoltage ?? state.batteryVoltage,
+    powerMode: powerMode === "unknown" ? state.powerMode : powerMode
+  })),
   setSerialConnected: (serialConnected, name) =>
     set({
       serialConnected,
