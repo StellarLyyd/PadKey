@@ -84,11 +84,11 @@ BLE advertises as `PadKey-S3` with custom service `7f23c000-2c44-4e7d-9f53-00000
 
 | Characteristic | UUID | Purpose |
 | --- | --- | --- |
-| Telemetry | `7f23c001-2c44-4e7d-9f53-000000000001` | Compact source-specific JSON at about 8 Hz |
-| Recordable audio | `7f23c002-2c44-4e7d-9f53-000000000001` | Continuous G.711 μ-law from one selected source |
+| Telemetry | `7f23c001-2c44-4e7d-9f53-000000000001` | Compact all-sensor JSON at about 8 Hz |
+| Recordable audio | `7f23c002-2c44-4e7d-9f53-000000000001` | Synchronized three-channel IMA ADPCM |
 | Control | `7f23c003-2c44-4e7d-9f53-000000000001` | Reserved device commands |
 
-BLE audio uses the same 15-byte PKAU header with protocol version `5`, one channel, an 8 kHz sample rate, consecutive packet sequence numbers, and the selected sensor id. Each remaining byte is one G.711 μ-law sample. Studio immediately expands those bytes to signed 16-bit PCM, so waveform display, processing, WAV export, and MP3 export continue to use the normal audio pipeline. Version 5 halves BLE traffic and emits 50 audio notifications per second instead of approximately 100. Legacy version 4 remains preview-only and must not be appended to recordings.
+BLE audio uses protocol version `6`, three channels, an 8 kHz sample rate, and consecutive packet sequence numbers. Byte 14 is the sample count per channel (`104`). The payload contains fixed-order INMP441, MAX4466, and piezo blocks. Each block is a signed 16-bit initial predictor, an 8-bit IMA step index, and 52 packed ADPCM bytes. The complete packet is 180 bytes, below the common 182-byte ATT value negotiated by macOS at MTU 185. Studio expands every block to signed 16-bit PCM for waveform display, processing, and export. Versions 4 and 5 remain accepted for older firmware.
 
 The control characteristic accepts UTF-8 JSON:
 
@@ -97,7 +97,7 @@ The control characteristic accepts UTF-8 JSON:
 {"type":"set_streaming","enabled":true}
 ```
 
-`sourceId` is `0` for INMP441, `1` for MAX4466, or `2` for piezo. BLE streams only one source at a time.
+`set_source` is retained for compatibility and UI focus only. Version 6 always streams all three sensors.
 
 The firmware also publishes the standard Battery Service `0x180F` and Battery Level characteristic `0x2A19`.
 
@@ -130,4 +130,4 @@ The wired reference sketch is available at:
 firmware/PadKey_Breadboard_PCM_USB/PadKey_Breadboard_PCM_USB.ino
 ```
 
-The production sketch at `firmware/PadKey_Breadboard_Production/PadKey_Breadboard_Production.ino` captures the INMP441 over I2S plus the MAX4466 on A5, protected piezo input on A8, and Charger BFF BATMON on A0 through ADC1 continuous DMA. It sends independent 16 kHz signed PCM channels over USB or Wi-Fi and one selected continuous 8 kHz channel over BLE.
+The production sketch at `firmware/PadKey_Breadboard_Production/PadKey_Breadboard_Production.ino` captures the INMP441 over I2S plus the MAX4466 on A5, protected piezo input on A8, and Charger BFF BATMON on A0 through ADC1 continuous DMA. It sends independent 16 kHz signed PCM channels over USB or Wi-Fi and synchronized 8 kHz ADPCM for all three sensors over BLE.

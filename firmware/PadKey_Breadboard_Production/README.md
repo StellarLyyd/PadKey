@@ -9,10 +9,10 @@ Target: Seeed Studio XIAO ESP32-S3 with three independent sensor channels, batte
 - protected piezo contact sensor on A8
 - Adafruit Charger BFF A2/BATMON sensing on XIAO A0
 - USB full-waveform streaming at 921600 baud
-- BLE telemetry, battery level, and one continuous 8 kHz recording channel as `PadKey-S3`
+- BLE all-sensor telemetry, battery level, and synchronized three-channel 8 kHz recording as `PadKey-S3`
 - optional Wi-Fi WebSocket full-waveform streaming
 
-BLE streams one selected sensor continuously so the browser can create playable WAV/MP3 recordings without saturating the wireless link. It sends 8 kHz G.711 μ-law over the radio at 50 audio notifications per second; Studio expands that stream to signed 16-bit PCM before playback or export. MAX4466 is the default; Studio can switch the source to INMP441 or piezo. USB and Wi-Fi remain the multi-channel paths.
+BLE streams all three sensors without saturating the wireless link. Each 180-byte notification contains synchronized 8 kHz IMA ADPCM for INMP441, MAX4466, and piezo and remains below the common macOS BLE payload limit. Studio expands each channel to signed 16-bit PCM before playback or export. USB and Wi-Fi retain higher-fidelity 16 kHz PCM.
 
 ## Arduino IDE settings
 
@@ -101,4 +101,4 @@ Wi-Fi is disabled by default. To enable it:
 
 Do not commit real Wi-Fi credentials to GitHub.
 
-For best battery life, use BLE with one selected source. Use Wi-Fi when you need all three sensor waveforms wirelessly.
+For best battery life, use BLE's compressed three-channel stream. Use Wi-Fi when you need all three waveforms at the full 16 kHz sample rate.

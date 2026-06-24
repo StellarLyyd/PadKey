@@ -24,42 +24,6 @@ import type { ChannelKey } from "./types";
 const defaultVocabulary = ["rest", "yes", "no", "help", "water"];
 const channelPreviewRings = createAudioChannelMap(() => new PcmRingBuffer(16000 * 30));
 
-function isolateBleFrame(frame: SensorFrame): SensorFrame {
-  if (frame.source !== "ble") return frame;
-  if (frame.sourceId === 0) {
-    return {
-      ...frame,
-      max4466: 0,
-      max4466Rms: 0,
-      pz1: 0,
-      piezo: 0,
-      piezoRms: 0,
-      soundDetected: frame.mic > frame.thresholdMic
-    };
-  }
-  if (frame.sourceId === 1) {
-    return {
-      ...frame,
-      mic: 0,
-      inmp441Rms: 0,
-      noiseFloor: 0,
-      pz1: 0,
-      piezo: 0,
-      piezoRms: 0,
-      soundDetected: frame.max4466 > 300
-    };
-  }
-  return {
-    ...frame,
-    mic: 0,
-    inmp441Rms: 0,
-    noiseFloor: 0,
-    max4466: 0,
-    max4466Rms: 0,
-    soundDetected: frame.piezo > frame.thresholdPiezo
-  };
-}
-
 interface AppState {
   bleConnected: boolean;
   bleDeviceName: string | null;
@@ -234,9 +198,7 @@ export const useAppStore = create<AppState>((set) => ({
   dictationTokens: [],
   pushFrame: (incomingFrame) =>
     set((state) => {
-      const frame = isolateBleFrame(incomingFrame.source === "ble"
-        ? { ...incomingFrame, sourceId: state.bleActiveSource }
-        : incomingFrame);
+      const frame = incomingFrame;
       const frameHistory = [...state.frameHistory, frame].slice(-120);
       const samples = state.recording
         ? [

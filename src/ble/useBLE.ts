@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
 import { useAppStore } from "../store";
-import { parseBinaryAudio, parseTransportLine } from "../transport/parsePacket";
+import { parseBinaryAudioPackets, parseTransportLine } from "../transport/parsePacket";
 
 const PADKEY_SERVICE_UUID = "7f23c000-2c44-4e7d-9f53-000000000001";
 const TELEMETRY_CHARACTERISTIC_UUID = "7f23c001-2c44-4e7d-9f53-000000000001";
@@ -61,7 +61,6 @@ export function useBLE(): BLEController {
 
   const status = useAppStore((state) => state.bleStatus);
   const error = useAppStore((state) => state.bleError);
-  const activeSource = useAppStore((state) => state.bleActiveSource);
   const pushFrame = useAppStore((state) => state.pushFrame);
   const pushAudioPacket = useAppStore((state) => state.pushAudioPacket);
   const setDeviceStatus = useAppStore((state) => state.setDeviceStatus);
@@ -90,8 +89,7 @@ export function useBLE(): BLEController {
     const characteristic = event.target as BluetoothRemoteGATTCharacteristic;
     const buffer = characteristicBuffer(characteristic);
     if (!buffer) return;
-    const packet = parseBinaryAudio(buffer);
-    if (packet) pushAudioPacket(packet);
+    for (const packet of parseBinaryAudioPackets(buffer)) pushAudioPacket(packet);
   }, [pushAudioPacket]);
 
   const handleBattery = useCallback((event: Event) => {
@@ -158,7 +156,6 @@ export function useBLE(): BLEController {
       audio.addEventListener("characteristicvaluechanged", handleAudio);
       await telemetry.startNotifications();
       await audio.startNotifications();
-      await writeControl(control, { type: "set_source", sourceId: activeSource });
       await writeControl(control, { type: "set_streaming", enabled: true });
 
       try {
@@ -186,7 +183,7 @@ export function useBLE(): BLEController {
       deviceRef.current = null;
       setBLEStatus("error", bleErrorMessage(connectionError));
     }
-  }, [activeSource, disconnect, handleAudio, handleBattery, handleDisconnect, handleTelemetry, setBatteryStatus, setBLEConnected, setBLEStatus]);
+  }, [disconnect, handleAudio, handleBattery, handleDisconnect, handleTelemetry, setBatteryStatus, setBLEConnected, setBLEStatus]);
 
   const setSource = useCallback(async (sourceId: 0 | 1 | 2) => {
     await writeControl(controlRef.current, { type: "set_source", sourceId });

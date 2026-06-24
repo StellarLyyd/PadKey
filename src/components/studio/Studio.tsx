@@ -28,12 +28,10 @@ import {
 import { downloadBlob, encodeMp3, encodeWav, mergePcmChunks } from "../../audio/exportAudio";
 import type { MacMicrophoneController } from "../../audio/useMacMicrophone";
 import type { BLEController } from "../../ble/useBLE";
-import { bleSourceChannel } from "../../ble/bleProtocol";
 import type { useSerial } from "../../serial/useSerial";
 import { useTranscriber } from "../../speech/useTranscriber";
 import { useAppStore } from "../../store";
 import type { useWifi } from "../../wifi/useWifi";
-import { BleSourcePicker } from "../capture/BleSourcePicker";
 import { createAudioProject, createDeviceAudioProject, importAudioFile } from "../../studio/importAudio";
 import { deleteAudioProject, getAudioProject, listAudioProjects, saveAudioProject } from "../../studio/projectDb";
 import { presetLabel, SOUND_PRESETS, STUDIO_SAMPLE_RATE } from "../../studio/presets";
@@ -231,8 +229,7 @@ function ConnectionDialog({
           </label>
         ) : mode === "ble" ? (
           <div className="studio-ble-connect">
-            <p className="studio-dialog-copy"><b>Wireless recording.</b> BLE sends one continuous sensor channel at 8 kHz. USB and Wi-Fi can carry all three channels.</p>
-            <BleSourcePicker ble={ble} />
+            <p className="studio-dialog-copy"><b>Efficient wireless recording.</b> BLE carries synchronized INMP441, MAX4466, and piezo audio at 8 kHz.</p>
           </div>
         ) : (
           <p className="studio-dialog-copy">Connect the board with its USB cable. Close Arduino Serial Monitor before opening PadKey.</p>
@@ -280,7 +277,6 @@ export function Studio({
   const serialStatus = useAppStore((state) => state.serialStatus);
   const wifiStatus = useAppStore((state) => state.wifiStatus);
   const bleStatus = useAppStore((state) => state.bleStatus);
-  const bleActiveSource = useAppStore((state) => state.bleActiveSource);
   const sessionRecording = useAppStore((state) => state.sessionRecording);
   const sessionStartedAt = useAppStore((state) => state.sessionStartedAt);
   const captureChannels = useAppStore((state) => state.captureChannels);
@@ -324,9 +320,6 @@ export function Studio({
     return () => window.clearInterval(timer);
   }, [setSerialBaudRate]);
 
-  useEffect(() => {
-    if (bleConnected) setLiveChannel(bleSourceChannel(bleActiveSource));
-  }, [bleActiveSource, bleConnected]);
 
   async function refreshRecent() {
     try {
