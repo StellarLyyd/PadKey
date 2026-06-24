@@ -46,7 +46,7 @@ The current three-channel sketch is:
 
 [`padkey-studio/firmware/PadKey_Breadboard_Production/PadKey_Breadboard_Production.ino`](./padkey-studio/firmware/PadKey_Breadboard_Production/PadKey_Breadboard_Production.ino)
 
-It streams 16 kHz signed waveform data for the INMP441, MAX4466 on A5, and a protected piezo input on A8; monitors the Charger BFF on A0; and advertises over BLE as `PadKey-S3`. BLE carries one selectable, continuous 8 kHz recording channel. Follow the adjacent [firmware README](./padkey-studio/firmware/PadKey_Breadboard_Production/README.md) before wiring or uploading it.
+It streams 16 kHz signed waveform data for the INMP441, MAX4466 on A5, and a protected piezo input on A8; monitors the Charger BFF on A0; and advertises over BLE as `PadKey-S3`. BLE carries one selectable, continuous 8 kHz recording channel using bandwidth-efficient G.711 μ-law, which Studio expands to signed 16-bit PCM. Follow the adjacent [firmware README](./padkey-studio/firmware/PadKey_Breadboard_Production/README.md) before wiring or uploading it.
 
 The standalone `.ino`, Python, and Wi-Fi files at the repository root are earlier experiments retained for reference.
 
