@@ -15,6 +15,7 @@ PadKey Studio is the browser workspace for recording, improving, reviewing, and 
 - Exports enhanced audio as 16-bit WAV or 128 kbps MP3.
 - Uses Whisper Tiny English in the browser to turn a recording into editable text. The model requires one initial internet download.
 - Keeps signal plots, packet diagnostics, labeled batch capture, model training, Speech Lab, and the PadKey dictionary under **Advanced**.
+- Connects to the local OwoFlow Mac agent under **Advanced → Mac control** to turn dictated commands into confirmed Notes, FaceTime, browser, and accessible UI actions.
 
 Audio editing and project storage stay in the browser. PadKey Studio does not require an audio-upload backend.
 
@@ -76,7 +77,11 @@ USB and Wi-Fi use the same channel-aware stream contract documented in [PADKEY_S
 
 BLE is enabled by default in the production firmware and advertises as `PadKey-S3`. Install the XIAO's external antenna, choose **Connect PadKey → BLE**, and select `PadKey-S3` in Chrome or Edge.
 
-BLE carries source-specific telemetry, battery level, and one continuous 8 kHz recording channel. Choose INMP441, MAX4466, or piezo before recording. The radio uses G.711 μ-law to reduce lag; Studio reconstructs signed 16-bit PCM before playback, processing, and export. USB and Wi-Fi can carry all three 16 kHz channels at once.
+BLE carries all-sensor telemetry, battery level, and synchronized 8 kHz waveforms for INMP441, MAX4466, and piezo. It uses independent IMA ADPCM blocks in 180-byte notifications, staying below the common 182-byte macOS ATT payload to prevent fragmentation and reduce lag. Studio reconstructs signed 16-bit PCM before playback, processing, and export. Wi-Fi and USB carry all three channels at 16 kHz.
+
+## Control Mac apps
+
+Launch the native OwoFlow app, open **Advanced → Mac control**, and check that the status reads `Mac Control ready`. Commands are sent only to `127.0.0.1`; they are never exposed to the network. Enable Accessibility when macOS asks. Calls and other consequential actions require an explicit confirmation.
 
 ## Test without hardware
 
@@ -107,6 +112,7 @@ Projects are autosaved in IndexedDB in the current browser profile. They are not
 - **Signal trainer:** collect labeled batches, train a local controlled-vocabulary classifier, and export its dataset/model.
 - **Speech lab:** inspect detected speech segments, processing, transcription, and training-data export.
 - **Learn:** a visual system guide and searchable plain-language dictionary.
+- **Mac control:** inspect the frontmost app, run spoken-style commands, review selected UI targets, grant permissions, and execute production checks.
 
 The signal trainer recognizes only phrases represented in its labeled training batches. Open-ended dictation requires raw microphone waveform data and the Whisper path.
 
@@ -125,7 +131,7 @@ The signal trainer recognizes only phrases represented in its labeled training b
 - Target board: Seeed Studio XIAO ESP32-S3
 - PadKey waveform format: mono signed 16-bit PCM at 16 kHz
 - Sensors: INMP441 over I2S, MAX4466 on A5, protected piezo input on A8
-- BLE is the wireless single-channel recording path; USB and Wi-Fi support continuous multi-channel capture.
+- BLE records three synchronized 8 kHz ADPCM channels; USB and Wi-Fi record three continuous 16 kHz PCM channels.
 - Do not connect an unprotected piezo directly to the ESP32-S3 analog input. Follow the protection guidance in the firmware README.
 
 See [PADKEY_STREAM_PROTOCOL.md](./PADKEY_STREAM_PROTOCOL.md) for packet formats and [FRONTEND_SIX_CHANNEL_CAPTURE_CODE.md](./FRONTEND_SIX_CHANNEL_CAPTURE_CODE.md) for additional capture notes.

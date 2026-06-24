@@ -4,7 +4,6 @@ import type { BLEController } from "../../ble/useBLE";
 import type { useSerial } from "../../serial/useSerial";
 import { useAppStore } from "../../store";
 import type { useWifi } from "../../wifi/useWifi";
-import { BleSourcePicker } from "./BleSourcePicker";
 
 type ConnectionMode = "serial" | "ble" | "wifi";
 
@@ -81,7 +80,7 @@ export function ConnectionPanel({
     <section className="control-section" aria-labelledby="connection-title">
       <div className="section-kicker">Input</div>
       <h2 id="connection-title" className="section-title">Connect PadKey</h2>
-      <p className="section-copy">USB records all sensors. BLE records one wireless channel. Wi-Fi records all sensors wirelessly.</p>
+      <p className="section-copy">USB, BLE, and Wi-Fi record all three PadKey sensors.</p>
 
       <div className="segmented transport-segmented" role="tablist" aria-label="Connection type">
         <button type="button" className={mode === "serial" ? "segmented-button is-active" : "segmented-button"} aria-selected={mode === "serial"} role="tab" onClick={() => setMode("serial")}>
@@ -106,8 +105,7 @@ export function ConnectionPanel({
         </div>
       ) : mode === "ble" ? (
         <div className="field-stack" role="tabpanel">
-          <p className="transport-explainer"><b>Wireless recording</b><span>BLE sends one continuous 8 kHz sensor channel to keep bandwidth and battery use predictable.</span></p>
-          <BleSourcePicker ble={ble} />
+          <p className="transport-explainer"><b>Efficient wireless recording</b><span>BLE sends synchronized INMP441, MAX4466, and piezo audio at 8 kHz using compact packets.</span></p>
           <p className="field-hint">Chrome or Edge will open a Bluetooth device picker. Choose PadKey-S3.</p>
         </div>
       ) : (

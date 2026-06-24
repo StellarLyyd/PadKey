@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, Battery, BatteryCharging, Bluetooth, Cable, Radio, Settings2, Wifi } from "lucide-react";
 import { useMacMicrophone } from "./audio/useMacMicrophone";
-import { bleSourceChannel } from "./ble/bleProtocol";
 import { useBLE } from "./ble/useBLE";
 import { CapturePanel } from "./components/capture/CapturePanel";
+import { AgentControlPanel } from "./components/agent/AgentControlPanel";
 import { CaptureProfilePanel } from "./components/capture/CaptureProfilePanel";
 import { ConnectionPanel } from "./components/capture/ConnectionPanel";
 import { FirmwareBoundary } from "./components/capture/FirmwareBoundary";
@@ -16,7 +16,7 @@ import { useSerial } from "./serial/useSerial";
 import { useAppStore } from "./store";
 import { useWifi } from "./wifi/useWifi";
 
-type AdvancedView = "signals" | "trainer" | "speech" | "learn";
+type AdvancedView = "signals" | "trainer" | "speech" | "agent" | "learn";
 
 function Metric({ label, value, detail, tone = "neutral" }: { label: string; value: string; detail: string; tone?: "neutral" | "mic" | "piezo" | "detected" }) {
   return (
@@ -38,7 +38,6 @@ export function App() {
   const serialConnected = useAppStore((state) => state.serialConnected);
   const wifiConnected = useAppStore((state) => state.wifiConnected);
   const bleConnected = useAppStore((state) => state.bleConnected);
-  const bleActiveSource = useAppStore((state) => state.bleActiveSource);
   const serialBaudRate = useAppStore((state) => state.serialBaudRate);
   const batteryPercent = useAppStore((state) => state.batteryPercent);
   const batteryVoltage = useAppStore((state) => state.batteryVoltage);
@@ -60,11 +59,10 @@ export function App() {
   const connected = serialConnected || wifiConnected || bleConnected;
   const source = latestFrame?.source === "wifi" ? "Wi-Fi" : latestFrame?.source === "serial" ? "USB" : latestFrame?.source === "ble" ? "BLE" : serialConnected ? "USB" : wifiConnected ? "Wi-Fi" : bleConnected ? "BLE" : "Offline";
   const recentFrame = Boolean(latestFrame && now - latestFrame.ts < 2000);
-  const bleChannel = bleSourceChannel(bleActiveSource);
   const deviceChannels = (["inmp441", "max4466", "piezo"] as const);
-  const rawAudioLive = (bleConnected ? [bleChannel] : deviceChannels)
+  const rawAudioLive = deviceChannels
     .some((channel) => Boolean(channelLastAudioPacketAt[channel] && now - (channelLastAudioPacketAt[channel] ?? 0) < 2000));
-  const recordableAudioLive = (bleConnected ? [bleChannel] : deviceChannels)
+  const recordableAudioLive = deviceChannels
     .some((channel) => Boolean(channelLastRecordableAudioPacketAt[channel] && now - (channelLastRecordableAudioPacketAt[channel] ?? 0) < 2000));
   const micValue = latestFrame?.mic ?? 0;
   const max4466Value = latestFrame?.max4466 ?? 0;
@@ -89,9 +87,8 @@ export function App() {
     <div className={`app-shell ${area === "studio" ? "is-studio" : "is-advanced"}`}>
       <header className="app-header app-header-v2">
         <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true">P</div>
+          <img className="brand-logo" src="/padkey-logo.svg" alt="PadKey" />
           <div>
-            <div className="brand-name">PadKey</div>
             <div className="brand-product">Voice Studio</div>
           </div>
         </div>
@@ -121,12 +118,13 @@ export function App() {
               ["signals", "Signals"],
               ["trainer", "Signal trainer"],
               ["speech", "Speech lab"],
+              ["agent", "Mac control"],
               ["learn", "Learn"]
             ] as Array<[AdvancedView, string]>).map(([id, label]) => (
               <button type="button" key={id} className={advancedView === id ? "is-active" : ""} aria-current={advancedView === id ? "page" : undefined} onClick={() => setAdvancedView(id)}>{label}</button>
             ))}
           </nav>
-          <div className={advancedView === "learn" ? "workspace is-learn" : "workspace"}>
+          <div className={advancedView === "learn" || advancedView === "agent" ? "workspace is-learn" : "workspace"}>
             <aside className="control-rail">
               <ConnectionPanel serial={serial} wifi={wifi} ble={ble} />
               <CaptureProfilePanel />
@@ -140,32 +138,32 @@ export function App() {
                     <div>
                       <div className="section-kicker">Live signal</div>
                       <h1 id="signal-title" className="workspace-title">Microphones + contact vibration</h1>
-                      <p className="panel-copy">{bleConnected ? `${bleChannel === "inmp441" ? "INMP441" : bleChannel === "max4466" ? "MAX4466" : "Piezo"} is the selected BLE input.` : "INMP441, MAX4466, and piezo values from the XIAO ESP32-S3."}</p>
+                      <p className="panel-copy">INMP441, MAX4466, and piezo values from the XIAO ESP32-S3.</p>
                     </div>
                     <div className="legend" aria-label="Chart legend">
-                      {(!bleConnected || bleChannel === "inmp441") ? <span><i className="legend-line mic-line" /> INMP441</span> : null}
-                      {(!bleConnected || bleChannel === "max4466") ? <span><i className="legend-line max4466-line" /> MAX4466</span> : null}
-                      {(!bleConnected || bleChannel === "piezo") ? <span><i className="legend-line piezo-line" /> Piezo</span> : null}
-                      {(!bleConnected || bleChannel === "inmp441") ? <span><i className="legend-line noise-line" /> Noise floor</span> : null}
-                      {(!bleConnected || bleChannel === "inmp441") ? <span><i className="legend-line threshold-line" /> Adaptive gate</span> : null}
+                      <span><i className="legend-line mic-line" /> INMP441</span>
+                      <span><i className="legend-line max4466-line" /> MAX4466</span>
+                      <span><i className="legend-line piezo-line" /> Piezo</span>
+                      <span><i className="legend-line noise-line" /> Noise floor</span>
+                      <span><i className="legend-line threshold-line" /> Adaptive gate</span>
                     </div>
                   </div>
 
                   <div className="metric-row">
-                    <Metric label="INMP441 peak" value={bleConnected && bleChannel !== "inmp441" ? "—" : micValue.toLocaleString()} detail={bleConnected && bleChannel !== "inmp441" ? "Not streamed over BLE" : `${micValue > micThreshold ? "Above" : "Below"} ${micThreshold.toLocaleString()} gate${noiseFloor ? ` · floor ${noiseFloor.toLocaleString()}` : ""}`} tone="mic" />
-                    <Metric label="MAX4466 peak" value={bleConnected && bleChannel !== "max4466" ? "—" : max4466Value.toLocaleString()} detail={bleConnected && bleChannel !== "max4466" ? "Not streamed over BLE" : "Analog microphone on A5"} />
-                    <Metric label="Piezo" value={bleConnected && bleChannel !== "piezo" ? "—" : piezoValue.toLocaleString()} detail={bleConnected && bleChannel !== "piezo" ? "Not streamed over BLE" : `${piezoValue > piezoThreshold ? "Above" : "Below"} ${piezoThreshold.toLocaleString()} threshold`} tone="piezo" />
+                    <Metric label="INMP441 peak" value={micValue.toLocaleString()} detail={`${micValue > micThreshold ? "Above" : "Below"} ${micThreshold.toLocaleString()} gate${noiseFloor ? ` · floor ${noiseFloor.toLocaleString()}` : ""}`} tone="mic" />
+                    <Metric label="MAX4466 peak" value={max4466Value.toLocaleString()} detail="Analog microphone on A5" />
+                    <Metric label="Piezo" value={piezoValue.toLocaleString()} detail={`${piezoValue > piezoThreshold ? "Above" : "Below"} ${piezoThreshold.toLocaleString()} threshold`} tone="piezo" />
                     <Metric label="Detection" value={detected ? "ACTIVE" : "QUIET"} detail={recentFrame ? `${fps} frames/sec · ${source}` : "Waiting for live frames"} tone={detected ? "detected" : "neutral"} />
                   </div>
 
-                  <SignalChart frames={frameHistory} lockedChannel={bleConnected ? bleChannel : undefined} />
+                  <SignalChart frames={frameHistory} />
                   <div className="chart-footer">
                     <span><Activity size={14} aria-hidden="true" /> 120-frame rolling window</span>
                     <span>Noise floor and adaptive gate come directly from firmware</span>
                   </div>
                 </section>
                 <CapturePanel macMicrophone={macMicrophone} />
-              </> : advancedView === "trainer" ? <SignalTrainingLab /> : advancedView === "speech" ? <SpeechLab /> : <LearnHub />}
+              </> : advancedView === "trainer" ? <SignalTrainingLab /> : advancedView === "speech" ? <SpeechLab /> : advancedView === "agent" ? <AgentControlPanel /> : <LearnHub />}
             </main>
           </div>
 
