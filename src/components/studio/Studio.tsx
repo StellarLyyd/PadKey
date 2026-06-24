@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  Bluetooth,
   Cable,
   Check,
   Circle,
@@ -26,10 +27,11 @@ import {
 } from "lucide-react";
 import { downloadBlob, encodeMp3, encodeWav, mergePcmChunks } from "../../audio/exportAudio";
 import type { MacMicrophoneController } from "../../audio/useMacMicrophone";
-import { useSerial } from "../../serial/useSerial";
+import type { BLEController } from "../../ble/useBLE";
+import type { useSerial } from "../../serial/useSerial";
 import { useTranscriber } from "../../speech/useTranscriber";
 import { useAppStore } from "../../store";
-import { useWifi } from "../../wifi/useWifi";
+import type { useWifi } from "../../wifi/useWifi";
 import { createAudioProject, createDeviceAudioProject, importAudioFile } from "../../studio/importAudio";
 import { deleteAudioProject, getAudioProject, listAudioProjects, saveAudioProject } from "../../studio/projectDb";
 import { presetLabel, SOUND_PRESETS, STUDIO_SAMPLE_RATE } from "../../studio/presets";
@@ -157,36 +159,50 @@ function WaveformChannelBar({
 function ConnectionDialog({
   onClose,
   serial,
-  wifi
+  wifi,
+  ble
 }: {
   onClose: () => void;
   serial: ReturnType<typeof useSerial>;
   wifi: ReturnType<typeof useWifi>;
+  ble: BLEController;
 }) {
-  const [mode, setMode] = useState<"usb" | "wifi">("usb");
+  const [mode, setMode] = useState<"usb" | "ble" | "wifi">("usb");
   const serialConnected = useAppStore((state) => state.serialConnected);
   const serialStatus = useAppStore((state) => state.serialStatus);
   const serialError = useAppStore((state) => state.serialError);
+  const bleConnected = useAppStore((state) => state.bleConnected);
+  const bleStatus = useAppStore((state) => state.bleStatus);
+  const bleError = useAppStore((state) => state.bleError);
   const wifiConnected = useAppStore((state) => state.wifiConnected);
   const wifiStatus = useAppStore((state) => state.wifiStatus);
   const wifiError = useAppStore((state) => state.wifiError);
   const wifiUrl = useAppStore((state) => state.wifiUrl);
   const setWifiUrl = useAppStore((state) => state.setWifiUrl);
-  const connected = mode === "usb" ? serialConnected : wifiConnected;
-  const connecting = mode === "usb" ? serialStatus === "connecting" : wifiStatus === "connecting";
-  const error = mode === "usb" ? serialError : wifiError;
+  const connected = mode === "usb" ? serialConnected : mode === "ble" ? bleConnected : wifiConnected;
+  const connecting = mode === "usb" ? serialStatus === "connecting" : mode === "ble" ? bleStatus === "connecting" : wifiStatus === "connecting";
+  const error = mode === "usb" ? serialError : mode === "ble" ? bleError : wifiError;
 
   async function toggleConnection() {
     if (mode === "usb") {
       if (serialConnected) await serial.disconnect();
       else {
+        ble.disconnect();
         if (wifiConnected) wifi.disconnect();
         await serial.connect();
+      }
+    } else if (mode === "ble") {
+      if (bleConnected) ble.disconnect();
+      else {
+        await serial.disconnect();
+        wifi.disconnect();
+        await ble.connect();
       }
     } else if (wifiConnected) {
       wifi.disconnect();
     } else {
       if (serialConnected) await serial.disconnect();
+      ble.disconnect();
       await wifi.connect(wifiUrl.trim());
     }
   }
@@ -201,8 +217,9 @@ function ConnectionDialog({
           </div>
           <button type="button" className="studio-icon-button" onClick={onClose} aria-label="Close connection settings"><X size={18} /></button>
         </div>
-        <div className="studio-segmented" role="tablist" aria-label="Connection type">
+        <div className="studio-segmented studio-transport-tabs" role="tablist" aria-label="Connection type">
           <button type="button" role="tab" aria-selected={mode === "usb"} className={mode === "usb" ? "is-active" : ""} onClick={() => setMode("usb")}><Cable size={16} /> USB cable</button>
+          <button type="button" role="tab" aria-selected={mode === "ble"} className={mode === "ble" ? "is-active" : ""} onClick={() => setMode("ble")}><Bluetooth size={16} /> BLE</button>
           <button type="button" role="tab" aria-selected={mode === "wifi"} className={mode === "wifi" ? "is-active" : ""} onClick={() => setMode("wifi")}><Wifi size={16} /> Wi-Fi</button>
         </div>
         {mode === "wifi" ? (
@@ -210,20 +227,32 @@ function ConnectionDialog({
             <span>PadKey address</span>
             <input value={wifiUrl} onChange={(event) => setWifiUrl(event.target.value)} placeholder="ws://padkey.local:81" spellCheck={false} />
           </label>
+        ) : mode === "ble" ? (
+          <p className="studio-dialog-copy"><b>Low-power preview.</b> See live sensor values, battery level, and waveform snapshots. Choose USB or Wi-Fi for continuous playable recordings.</p>
         ) : (
           <p className="studio-dialog-copy">Connect the board with its USB cable. Close Arduino Serial Monitor before opening PadKey.</p>
         )}
         {error ? <div className="studio-inline-error">{error}</div> : null}
         <button type="button" className="studio-button studio-button-primary studio-button-wide" disabled={connecting || (mode === "wifi" && !wifiUrl.trim())} onClick={() => void toggleConnection()}>
-          {connecting ? <Loader2 className="spin" size={17} /> : connected ? <Check size={17} /> : mode === "usb" ? <Cable size={17} /> : <Wifi size={17} />}
-          {connecting ? "Connecting…" : connected ? "Connected" : "Connect"}
+          {connecting ? <Loader2 className="spin" size={17} /> : connected ? <Check size={17} /> : mode === "usb" ? <Cable size={17} /> : mode === "ble" ? <Bluetooth size={17} /> : <Wifi size={17} />}
+          {connecting ? "Connecting…" : connected ? `Disconnect ${mode === "usb" ? "USB" : mode === "ble" ? "BLE" : "Wi-Fi"}` : `Connect ${mode === "usb" ? "USB" : mode === "ble" ? "BLE" : "Wi-Fi"}`}
         </button>
       </section>
     </div>
   );
 }
 
-export function Studio({ macMicrophone }: { macMicrophone: MacMicrophoneController }) {
+export function Studio({
+  macMicrophone,
+  serial,
+  wifi,
+  ble
+}: {
+  macMicrophone: MacMicrophoneController;
+  serial: ReturnType<typeof useSerial>;
+  wifi: ReturnType<typeof useWifi>;
+  ble: BLEController;
+}) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [project, setProject] = useState<AudioProject | null>(null);
   const [recentProjects, setRecentProjects] = useState<AudioProjectSummary[]>([]);
@@ -242,14 +271,17 @@ export function Studio({ macMicrophone }: { macMicrophone: MacMicrophoneControll
 
   const serialConnected = useAppStore((state) => state.serialConnected);
   const wifiConnected = useAppStore((state) => state.wifiConnected);
+  const bleConnected = useAppStore((state) => state.bleConnected);
   const serialStatus = useAppStore((state) => state.serialStatus);
   const wifiStatus = useAppStore((state) => state.wifiStatus);
+  const bleStatus = useAppStore((state) => state.bleStatus);
   const sessionRecording = useAppStore((state) => state.sessionRecording);
   const sessionStartedAt = useAppStore((state) => state.sessionStartedAt);
   const captureChannels = useAppStore((state) => state.captureChannels);
   const channelAudioPreviews = useAppStore((state) => state.channelAudioPreviews);
   const channelAudioSampleCounts = useAppStore((state) => state.channelAudioSampleCounts);
   const channelLastAudioPacketAt = useAppStore((state) => state.channelLastAudioPacketAt);
+  const channelLastRecordableAudioPacketAt = useAppStore((state) => state.channelLastRecordableAudioPacketAt);
   const latestFrame = useAppStore((state) => state.latestFrame);
   const deviceStatus = useAppStore((state) => state.deviceStatus);
   const droppedAudioPackets = useAppStore((state) => state.droppedAudioPackets);
@@ -258,20 +290,20 @@ export function Studio({ macMicrophone }: { macMicrophone: MacMicrophoneControll
   const clearSession = useAppStore((state) => state.clearSession);
   const setCaptureChannelEnabled = useAppStore((state) => state.setCaptureChannelEnabled);
   const setSerialBaudRate = useAppStore((state) => state.setSerialBaudRate);
-  const serial = useSerial(921600);
-  const wifi = useWifi();
   const transcriber = useTranscriber();
 
-  const connected = serialConnected || wifiConnected;
-  const connecting = serialStatus === "connecting" || wifiStatus === "connecting";
+  const connected = serialConnected || wifiConnected || bleConnected;
+  const connecting = serialStatus === "connecting" || wifiStatus === "connecting" || bleStatus === "connecting";
   const padkeySignalLive = (["inmp441", "max4466", "piezo"] as const)
     .some((channel) => Boolean(channelLastAudioPacketAt[channel] && now - (channelLastAudioPacketAt[channel] ?? 0) < 2000));
   const selectedInputReady = STUDIO_AUDIO_CHANNELS.some((channel) =>
     captureChannels[channel.key]
-      && Boolean(channelLastAudioPacketAt[channel.key] && now - (channelLastAudioPacketAt[channel.key] ?? 0) < 2000));
+      && Boolean(channelLastRecordableAudioPacketAt[channel.key] && now - (channelLastRecordableAudioPacketAt[channel.key] ?? 0) < 2000));
   const telemetryLive = Boolean(latestFrame?.ts && now - latestFrame.ts < 2000);
   const connectionLabel = !connected
     ? "PadKey not connected"
+    : bleConnected
+      ? padkeySignalLive ? "PadKey connected · BLE preview" : "PadKey connected · BLE signal"
     : droppedAudioPackets
       ? "PadKey connected · Check signal"
       : padkeySignalLive
@@ -416,10 +448,15 @@ export function Studio({ macMicrophone }: { macMicrophone: MacMicrophoneControll
   async function connectOrRecord() {
     setError(null);
     if (!connected && !(captureChannels.macbook && macMicrophone.status === "live")) {
-      await serial.connect();
+      setConnectionOpen(true);
       return;
     }
     if (!selectedInputReady) {
+      if (bleConnected) {
+        setConnectionOpen(true);
+        setError("BLE is connected for low-power monitoring. Choose USB or Wi-Fi for a continuous PadKey audio recording, or enable the MacBook baseline.");
+        return;
+      }
       setError(telemetryLive
         ? "PadKey is sending sensor readings, but the selected inputs are not sending recordable sound."
         : "The selected recording inputs are not ready yet. Wait a moment and try again.");
@@ -661,7 +698,7 @@ export function Studio({ macMicrophone }: { macMicrophone: MacMicrophoneControll
             </div>
           </section>
         ) : null}
-        {connectionOpen ? <ConnectionDialog onClose={() => setConnectionOpen(false)} serial={serial} wifi={wifi} /> : null}
+        {connectionOpen ? <ConnectionDialog onClose={() => setConnectionOpen(false)} serial={serial} wifi={wifi} ble={ble} /> : null}
       </main>
     );
   }

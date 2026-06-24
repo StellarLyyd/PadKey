@@ -9,11 +9,12 @@
 
   Outputs:
     - USB: newline-delimited JSON, including Base64 PCM audio
+    - BLE: battery level + telemetry notifications + low-bandwidth monitor PCM
     - Wi-Fi (optional): JSON telemetry + efficient binary PCM over WebSocket
 
-  PadKey Studio settings for USB:
-    - Connection: Wired USB
-    - Baud rate: 921600
+  PadKey Studio settings:
+    - USB wired: baud rate 921600
+    - BLE wireless: connect to device name "PadKey-S3"
 
   IMPORTANT ELECTRICAL NOTES:
     - Power the INMP441 from 3.3 V, never 5 V.
@@ -25,12 +26,22 @@
       at least a 100 kOhm series resistor, a 1 MOhm bleed resistor, and
       Schottky clamps to 0 V / 3.3 V. For a bipolar contact waveform, bias the
       protected ADC input at about 1.65 V. Firmware cannot protect a GPIO.
+    - Battery monitor wiring: ESP32-S3 A0 -> Adafruit Charger BFF A2/BATMON.
+      This is a voltage-sense connection only. It does not power the ESP32.
+      Battery power must still come from the charger/BFF power output to the
+      board 5V/VBUS rail, with grounds tied together. Do not put raw LiPo on A0.
+
+  BLE is enabled by default. It is the right wireless path for this breadboard
+  demo because it avoids needing a router and advertises as "PadKey-S3".
 
   Wi-Fi is disabled by default. To enable it:
     1. Install "ArduinoWebsockets" by Gil Maimon in Arduino Library Manager.
     2. Change PADKEY_ENABLE_WIFI to 1.
     3. Enter PADKEY_WIFI_SSID and PADKEY_WIFI_PASSWORD below.
     4. Connect PadKey Studio to ws://padkey.local:81 or ws://<board-ip>:81.
+
+  BLE dependency:
+    - Uses the ESP32 BLE Arduino library included with the ESP32 Arduino core.
 */
 
 #include <Arduino.h>
@@ -42,6 +53,10 @@
 
 #ifndef PADKEY_ENABLE_WIFI
 #define PADKEY_ENABLE_WIFI 0
+#endif
+
+#ifndef PADKEY_ENABLE_BLE
+#define PADKEY_ENABLE_BLE 1
 #endif
 
 #ifndef PADKEY_WIFI_SSID
@@ -58,6 +73,12 @@
 #include <WiFi.h>
 #endif
 
+#if PADKEY_ENABLE_BLE
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#endif
+
 namespace Config {
 
 // INMP441 connections.
@@ -69,6 +90,7 @@ constexpr int kI2sSdPin = D2;   // INMP441 SD
 // Other hardware.
 constexpr int kMax4466Pin = A5;
 constexpr int kPiezoPin = A8;
+constexpr int kBatteryMonitorPin = A0;  // ESP32-S3 A0 -> Adafruit BFF A2/BATMON
 constexpr int kLedPin = 21;
 constexpr bool kLedActiveLow = true;
 
@@ -84,10 +106,11 @@ constexpr bool kStreamWifiPcm = true;
 // frequency is the aggregate conversion rate, so two channels at 16 kHz each
 // require 32,000 conversions/second.
 constexpr uint32_t kAnalogSampleRatePerChannel = 16000;
+constexpr size_t kAnalogChannelCount = 3;  // MAX4466 + piezo + battery monitor
 constexpr uint32_t kAnalogAggregateSampleRate =
-    kAnalogSampleRatePerChannel * 2;
+    kAnalogSampleRatePerChannel * kAnalogChannelCount;
 constexpr size_t kAnalogReadBufferBytes =
-    kSamplesPerPacket * 2 * SOC_ADC_DIGI_RESULT_BYTES;
+    kSamplesPerPacket * kAnalogChannelCount * SOC_ADC_DIGI_RESULT_BYTES;
 constexpr size_t kAnalogPoolBytes = kAnalogReadBufferBytes * 4;
 
 // Sensor detection.
@@ -98,6 +121,16 @@ constexpr uint16_t kPiezoThreshold = 100;
 constexpr uint16_t kMax4466Threshold = 300;
 constexpr uint8_t kTelemetryEveryPackets = 4;     // About 15.6 Hz.
 
+// Adafruit Charger BFF battery monitor. The BFF divides the monitored 5V/VBAT
+// rail by 1/2 before exposing it on A2, so firmware doubles the ADC voltage.
+// Treat this as an estimate; calibrate with a multimeter before trusting it.
+constexpr float kAdcReferenceVolts = 3.3f;
+constexpr float kBatteryDividerMultiplier = 2.0f;
+constexpr float kBatteryEmptyVolts = 3.30f;
+constexpr float kBatteryFullVolts = 4.20f;
+constexpr float kUsbLikelyVolts = 4.30f;
+constexpr uint32_t kBatteryNotifyIntervalMs = 1000;
+
 // I2S DMA. Four 256-sample buffers provide about 64 ms of buffering.
 constexpr int kDmaBufferCount = 4;
 constexpr int kDmaBufferLength = kSamplesPerPacket;
@@ -107,6 +140,17 @@ constexpr TickType_t kI2sReadTimeout = pdMS_TO_TICKS(100);
 constexpr uint16_t kWebSocketPort = 81;
 constexpr char kMdnsHostname[] = "padkey";
 constexpr uint32_t kWifiRetryIntervalMs = 5000;
+#endif
+
+#if PADKEY_ENABLE_BLE
+constexpr char kBleDeviceName[] = "PadKey-S3";
+constexpr char kBlePadKeyServiceUuid[] = "7f23c000-2c44-4e7d-9f53-000000000001";
+constexpr char kBleTelemetryCharUuid[] = "7f23c001-2c44-4e7d-9f53-000000000001";
+constexpr char kBleAudioCharUuid[] = "7f23c002-2c44-4e7d-9f53-000000000001";
+constexpr char kBleControlCharUuid[] = "7f23c003-2c44-4e7d-9f53-000000000001";
+constexpr uint16_t kBleMtu = 247;
+constexpr size_t kBleAudioSamplesPerNotify = 96;  // 15 + 192 bytes = safe under MTU 247.
+constexpr uint8_t kBleAudioEveryPackets = 8;      // Monitor stream, not full-fidelity audio.
 #endif
 
 }  // namespace Config
@@ -128,6 +172,11 @@ struct RuntimeState {
   bool piezoDcReady = false;
   int32_t max4466Peak = 0;
   int32_t piezoPeak = 0;
+  uint32_t batteryRawAverageQ16 = 0;
+  bool batteryAverageReady = false;
+  float batteryVoltage = 0.0f;
+  uint8_t batteryPercent = 0;
+  bool likelyUsbPowered = false;
   bool usbWasConnected = false;
 };
 
@@ -143,6 +192,7 @@ size_t piezoPcmCount = 0;
 adc_continuous_handle_t adcHandle = nullptr;
 adc_channel_t max4466AdcChannel = ADC_CHANNEL_0;
 adc_channel_t piezoAdcChannel = ADC_CHANNEL_0;
+adc_channel_t batteryAdcChannel = ADC_CHANNEL_0;
 uint8_t analogReadBuffer[Config::kAnalogReadBufferBytes];
 
 // Base64 needs four output bytes for each three input bytes, rounded up.
@@ -152,7 +202,7 @@ constexpr size_t kBase64Capacity =
     ((kPcmBytesPerPacket + 2) / 3) * 4 + 1;
 char base64Pcm[kBase64Capacity];
 
-char telemetryJson[480];
+char telemetryJson[768];
 
 enum class AudioSourceId : uint8_t {
   kInmp441 = 0,
@@ -182,6 +232,18 @@ uint32_t lastWifiAttemptMs = 0;
 
 // PKAU version 3 header (15 bytes) followed by signed 16-bit LE PCM.
 uint8_t wifiAudioPacket[15 + kPcmBytesPerPacket];
+#endif
+
+#if PADKEY_ENABLE_BLE
+BLEServer* bleServer = nullptr;
+BLECharacteristic* bleTelemetryCharacteristic = nullptr;
+BLECharacteristic* bleAudioCharacteristic = nullptr;
+BLECharacteristic* bleControlCharacteristic = nullptr;
+BLECharacteristic* bleBatteryLevelCharacteristic = nullptr;
+bool bleClientConnected = false;
+bool bleAdvertisingRestartNeeded = false;
+uint32_t lastBleBatteryNotifyMs = 0;
+uint8_t bleAudioPacket[15 + Config::kBleAudioSamplesPerNotify * sizeof(int16_t)];
 #endif
 
 void setLed(bool on) {
@@ -262,21 +324,20 @@ void updateAdaptiveGate(int32_t blockPeak) {
 }
 
 bool initializeI2s() {
-  const i2s_config_t i2sConfig = {
-      .mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_RX),
-      .sample_rate = Config::kSampleRate,
-      .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
-      .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-      .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-      .dma_buf_count = Config::kDmaBufferCount,
-      .dma_buf_len = Config::kDmaBufferLength,
-      .use_apll = false,
-      .tx_desc_auto_clear = false,
-      .fixed_mclk = 0,
-      .mclk_multiple = I2S_MCLK_MULTIPLE_256,
-      .bits_per_chan = I2S_BITS_PER_CHAN_32BIT,
-  };
+  i2s_config_t i2sConfig = {};
+  i2sConfig.mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_RX);
+  i2sConfig.sample_rate = Config::kSampleRate;
+  i2sConfig.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT;
+  i2sConfig.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
+  i2sConfig.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+  i2sConfig.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
+  i2sConfig.dma_buf_count = Config::kDmaBufferCount;
+  i2sConfig.dma_buf_len = Config::kDmaBufferLength;
+  i2sConfig.use_apll = false;
+  i2sConfig.tx_desc_auto_clear = false;
+  i2sConfig.fixed_mclk = 0;
+  i2sConfig.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+  i2sConfig.bits_per_chan = I2S_BITS_PER_CHAN_32BIT;
 
   const i2s_pin_config_t pinConfig = {
       .mck_io_num = I2S_PIN_NO_CHANGE,
@@ -313,6 +374,7 @@ bool initializeI2s() {
 void initializeAnalogCapture() {
   adc_unit_t max4466Unit = ADC_UNIT_1;
   adc_unit_t piezoUnit = ADC_UNIT_1;
+  adc_unit_t batteryUnit = ADC_UNIT_1;
   esp_err_t result = adc_continuous_io_to_channel(
       Config::kMax4466Pin,
       &max4466Unit,
@@ -329,6 +391,14 @@ void initializeAnalogCapture() {
     haltWithError("piezo ADC pin mapping", result != ESP_OK ? result : ESP_ERR_INVALID_ARG);
   }
 
+  result = adc_continuous_io_to_channel(
+      Config::kBatteryMonitorPin,
+      &batteryUnit,
+      &batteryAdcChannel);
+  if (result != ESP_OK || batteryUnit != ADC_UNIT_1) {
+    haltWithError("battery ADC pin mapping", result != ESP_OK ? result : ESP_ERR_INVALID_ARG);
+  }
+
   adc_continuous_handle_cfg_t handleConfig = {};
   handleConfig.max_store_buf_size = Config::kAnalogPoolBytes;
   handleConfig.conv_frame_size = Config::kAnalogReadBufferBytes;
@@ -338,18 +408,22 @@ void initializeAnalogCapture() {
     haltWithError("adc_continuous_new_handle", result);
   }
 
-  adc_digi_pattern_config_t patterns[2] = {};
-  patterns[0].atten = ADC_ATTEN_DB_11;
+  adc_digi_pattern_config_t patterns[Config::kAnalogChannelCount] = {};
+  patterns[0].atten = ADC_ATTEN_DB_12;
   patterns[0].channel = max4466AdcChannel;
   patterns[0].unit = ADC_UNIT_1;
   patterns[0].bit_width = ADC_BITWIDTH_12;
-  patterns[1].atten = ADC_ATTEN_DB_11;
+  patterns[1].atten = ADC_ATTEN_DB_12;
   patterns[1].channel = piezoAdcChannel;
   patterns[1].unit = ADC_UNIT_1;
   patterns[1].bit_width = ADC_BITWIDTH_12;
+  patterns[2].atten = ADC_ATTEN_DB_12;
+  patterns[2].channel = batteryAdcChannel;
+  patterns[2].unit = ADC_UNIT_1;
+  patterns[2].bit_width = ADC_BITWIDTH_12;
 
   adc_continuous_config_t adcConfig = {};
-  adcConfig.pattern_num = 2;
+  adcConfig.pattern_num = Config::kAnalogChannelCount;
   adcConfig.adc_pattern = patterns;
   adcConfig.sample_freq_hz = Config::kAnalogAggregateSampleRate;
   adcConfig.conv_mode = ADC_CONV_SINGLE_UNIT_1;
@@ -363,6 +437,43 @@ void initializeAnalogCapture() {
   if (result != ESP_OK) {
     haltWithError("adc_continuous_start", result);
   }
+}
+
+uint8_t estimateBatteryPercent(float batteryVolts) {
+  if (batteryVolts <= Config::kBatteryEmptyVolts) return 0;
+  if (batteryVolts >= Config::kBatteryFullVolts) return 100;
+
+  // Simple single-cell LiPo estimate. This is intentionally conservative and
+  // good enough for prototype telemetry, not fuel-gauge accuracy.
+  const float normalized =
+      (batteryVolts - Config::kBatteryEmptyVolts) /
+      (Config::kBatteryFullVolts - Config::kBatteryEmptyVolts);
+  return static_cast<uint8_t>(normalized * 100.0f + 0.5f);
+}
+
+void updateBatteryEstimate(uint16_t rawSample) {
+  const uint32_t rawQ16 = static_cast<uint32_t>(rawSample) << 16;
+  if (!state.batteryAverageReady) {
+    state.batteryRawAverageQ16 = rawQ16;
+    state.batteryAverageReady = true;
+  } else {
+    // Heavy smoothing because battery changes slowly and ADC readings are noisy.
+    state.batteryRawAverageQ16 +=
+        (static_cast<int32_t>(rawQ16) -
+         static_cast<int32_t>(state.batteryRawAverageQ16)) >> 8;
+  }
+
+  const float rawAverage =
+      static_cast<float>(state.batteryRawAverageQ16) / 65536.0f;
+  const float adcVolts =
+      (rawAverage / 4095.0f) * Config::kAdcReferenceVolts;
+  state.batteryVoltage = adcVolts * Config::kBatteryDividerMultiplier;
+  state.likelyUsbPowered = state.batteryVoltage >= Config::kUsbLikelyVolts;
+  state.batteryPercent = estimateBatteryPercent(state.batteryVoltage);
+}
+
+const char* powerModeName() {
+  return state.likelyUsbPowered ? "usb_or_charging" : "battery";
 }
 
 int16_t convertAnalogSample(
@@ -431,6 +542,8 @@ void collectAnalogSamples() {
           state.piezoDcReady);
       piezoPcm[piezoPcmCount++] = pcm;
       state.piezoPeak = max(state.piezoPeak, sampleMagnitude(pcm));
+    } else if (channel == batteryAdcChannel) {
+      updateBatteryEstimate(raw);
     }
   }
 }
@@ -492,8 +605,10 @@ size_t formatTelemetry(
       "\"noiseFloor\":%ld,\"gate\":%ld,"
       "\"thresholdMax4466\":%u,\"thresholdPiezo\":%u,"
       "\"soundDetected\":%s,\"sampleRate\":%lu,"
-      "\"sequence\":%lu,\"i2sReadErrors\":%lu,\"adcReadErrors\":%lu,"
-      "\"usbEncodeErrors\":%lu}",
+      "\"sequence\":%lu,\"batteryVoltage\":%.3f,"
+      "\"batteryPercent\":%u,\"powerMode\":\"%s\","
+      "\"bleConnected\":%s,\"i2sReadErrors\":%lu,"
+      "\"adcReadErrors\":%lu,\"usbEncodeErrors\":%lu}",
       static_cast<long>(micPeak),
       static_cast<long>(state.max4466Peak),
       static_cast<long>(state.piezoPeak),
@@ -504,6 +619,14 @@ size_t formatTelemetry(
       soundDetected ? "true" : "false",
       static_cast<unsigned long>(Config::kSampleRate),
       static_cast<unsigned long>(state.packetSequence),
+      static_cast<double>(state.batteryVoltage),
+      static_cast<unsigned>(state.batteryPercent),
+      powerModeName(),
+#if PADKEY_ENABLE_BLE
+      bleClientConnected ? "true" : "false",
+#else
+      "false",
+#endif
       static_cast<unsigned long>(state.i2sReadErrors),
       static_cast<unsigned long>(state.adcReadErrors),
       static_cast<unsigned long>(state.usbEncodeErrors));
@@ -514,7 +637,166 @@ size_t formatTelemetry(
   return static_cast<size_t>(written);
 }
 
-#if PADKEY_ENABLE_WIFI
+
+void putUint32LittleEndian(uint8_t* destination, uint32_t value);
+
+#if PADKEY_ENABLE_BLE
+class PadKeyBleServerCallbacks : public BLEServerCallbacks {
+ public:
+  void onConnect(BLEServer*) override {
+    bleClientConnected = true;
+    sendStatus("info", "BLE client connected");
+  }
+
+  void onDisconnect(BLEServer*) override {
+    bleClientConnected = false;
+    bleAdvertisingRestartNeeded = true;
+    sendStatus("info", "BLE client disconnected");
+  }
+};
+
+class PadKeyBleControlCallbacks : public BLECharacteristicCallbacks {
+ public:
+  void onWrite(BLECharacteristic* characteristic) override {
+    const String value = characteristic->getValue();
+    if (value == "led:on") {
+      setLed(true);
+    } else if (value == "led:off") {
+      setLed(false);
+    } else if (value == "status") {
+      sendStatus("info", "BLE control status command received");
+    }
+  }
+};
+
+void initializeBle() {
+  BLEDevice::init(Config::kBleDeviceName);
+  BLEDevice::setMTU(Config::kBleMtu);
+
+  bleServer = BLEDevice::createServer();
+  bleServer->setCallbacks(new PadKeyBleServerCallbacks());
+
+  BLEService* padKeyService = bleServer->createService(Config::kBlePadKeyServiceUuid);
+
+  bleTelemetryCharacteristic = padKeyService->createCharacteristic(
+      Config::kBleTelemetryCharUuid,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  bleTelemetryCharacteristic->setValue("{\"type\":\"status\",\"message\":\"PadKey BLE ready\"}");
+
+  bleAudioCharacteristic = padKeyService->createCharacteristic(
+      Config::kBleAudioCharUuid,
+      BLECharacteristic::PROPERTY_NOTIFY);
+
+  bleControlCharacteristic = padKeyService->createCharacteristic(
+      Config::kBleControlCharUuid,
+      BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
+  bleControlCharacteristic->setCallbacks(new PadKeyBleControlCallbacks());
+
+  padKeyService->start();
+
+  BLEService* batteryService = bleServer->createService(BLEUUID((uint16_t)0x180F));
+  bleBatteryLevelCharacteristic = batteryService->createCharacteristic(
+      BLEUUID((uint16_t)0x2A19),
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  bleBatteryLevelCharacteristic->setValue(&state.batteryPercent, 1);
+  batteryService->start();
+
+  BLEAdvertising* advertising = BLEDevice::getAdvertising();
+  advertising->addServiceUUID(Config::kBlePadKeyServiceUuid);
+  advertising->addServiceUUID(BLEUUID((uint16_t)0x180F));
+  advertising->setScanResponse(true);
+  advertising->setMinPreferred(0x06);
+  advertising->setMinPreferred(0x12);
+  BLEDevice::startAdvertising();
+
+  sendStatus("ready", "BLE advertising started as PadKey-S3");
+}
+
+void serviceBle() {
+  if (bleAdvertisingRestartNeeded) {
+    delay(50);
+    BLEDevice::startAdvertising();
+    bleAdvertisingRestartNeeded = false;
+  }
+
+  if (!bleClientConnected || !bleBatteryLevelCharacteristic) {
+    return;
+  }
+
+  const uint32_t nowMs = millis();
+  if (nowMs - lastBleBatteryNotifyMs >= Config::kBatteryNotifyIntervalMs) {
+    lastBleBatteryNotifyMs = nowMs;
+    bleBatteryLevelCharacteristic->setValue(&state.batteryPercent, 1);
+    bleBatteryLevelCharacteristic->notify();
+  }
+}
+
+void sendBleTelemetry(size_t jsonLength) {
+  if (!bleClientConnected || !bleTelemetryCharacteristic || jsonLength == 0) {
+    return;
+  }
+
+  // The complete telemetry object can exceed one ATT notification even with
+  // a negotiated 247-byte MTU. Send it as a newline-terminated byte stream;
+  // PadKey Studio reassembles the chunks before parsing the JSON object.
+  constexpr size_t kBleTelemetryChunkBytes = 180;
+  size_t offset = 0;
+  while (offset < jsonLength) {
+    const size_t chunkLength = min(
+        kBleTelemetryChunkBytes,
+        jsonLength - offset);
+    bleTelemetryCharacteristic->setValue(
+        reinterpret_cast<const uint8_t*>(&telemetryJson[offset]),
+        chunkLength);
+    bleTelemetryCharacteristic->notify();
+    offset += chunkLength;
+    delay(2);
+  }
+
+  static const uint8_t newline = '\n';
+  bleTelemetryCharacteristic->setValue(&newline, 1);
+  bleTelemetryCharacteristic->notify();
+}
+
+void sendBleAudio(
+    AudioSourceId source,
+    const int16_t* samples,
+    size_t sampleCount,
+    uint32_t sequence) {
+  if (!bleClientConnected || !bleAudioCharacteristic || sampleCount == 0) {
+    return;
+  }
+
+  if ((sequence % Config::kBleAudioEveryPackets) != 0) {
+    return;
+  }
+
+  const size_t notifySamples = min(sampleCount, Config::kBleAudioSamplesPerNotify);
+  const size_t pcmByteCount = notifySamples * sizeof(int16_t);
+
+  // Same compact binary framing as Wi-Fi audio, but intentionally shortened
+  // for BLE MTU. Header: "PKAU", version, mono, sampleRate, sequence, source.
+  bleAudioPacket[0] = 'P';
+  bleAudioPacket[1] = 'K';
+  bleAudioPacket[2] = 'A';
+  bleAudioPacket[3] = 'U';
+  bleAudioPacket[4] = 4;  // BLE monitor protocol version.
+  bleAudioPacket[5] = 1;  // Mono.
+  putUint32LittleEndian(&bleAudioPacket[6], Config::kSampleRate);
+  putUint32LittleEndian(&bleAudioPacket[10], sequence);
+  bleAudioPacket[14] = static_cast<uint8_t>(source);
+  memcpy(&bleAudioPacket[15], samples, pcmByteCount);
+
+  bleAudioCharacteristic->setValue(bleAudioPacket, 15 + pcmByteCount);
+  bleAudioCharacteristic->notify();
+}
+#else
+void initializeBle() {}
+void serviceBle() {}
+void sendBleTelemetry(size_t) {}
+void sendBleAudio(AudioSourceId, const int16_t*, size_t, uint32_t) {}
+#endif
+
 void putUint32LittleEndian(uint8_t* destination, uint32_t value) {
   destination[0] = static_cast<uint8_t>(value & 0xFF);
   destination[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
@@ -522,6 +804,7 @@ void putUint32LittleEndian(uint8_t* destination, uint32_t value) {
   destination[3] = static_cast<uint8_t>((value >> 24) & 0xFF);
 }
 
+#if PADKEY_ENABLE_WIFI
 void beginWifiConnection() {
   lastWifiAttemptMs = millis();
   WiFi.begin(PADKEY_WIFI_SSID, PADKEY_WIFI_PASSWORD);
@@ -642,12 +925,14 @@ void setup() {
 
   initializeI2s();
   initializeAnalogCapture();
+  initializeBle();
   initializeWifi();
   sendStatus("ready", "PadKey sensors initialized");
 }
 
 void loop() {
   serviceUsbConnection();
+  serviceBle();
   serviceWifi();
 
   size_t bytesRead = 0;
@@ -699,6 +984,7 @@ void loop() {
 
   const uint32_t sequence = state.packetSequence++;
   sendUsbAudio(AudioSourceId::kInmp441, inmp441Pcm, sampleCount, sequence);
+  sendBleAudio(AudioSourceId::kInmp441, inmp441Pcm, sampleCount, sequence);
   sendWifiAudio(AudioSourceId::kInmp441, inmp441Pcm, sampleCount, sequence);
   if (analogPacketReady) {
     sendUsbAudio(
@@ -707,6 +993,16 @@ void loop() {
         max4466PcmCount,
         sequence);
     sendUsbAudio(
+        AudioSourceId::kPiezo,
+        piezoPcm,
+        piezoPcmCount,
+        sequence);
+    sendBleAudio(
+        AudioSourceId::kMax4466,
+        max4466Pcm,
+        max4466PcmCount,
+        sequence);
+    sendBleAudio(
         AudioSourceId::kPiezo,
         piezoPcm,
         piezoPcmCount,
@@ -731,6 +1027,7 @@ void loop() {
           jsonLength);
       Serial.write('\n');
     }
+    sendBleTelemetry(jsonLength);
     sendWifiTelemetry(jsonLength);
   }
 
@@ -741,5 +1038,6 @@ void loop() {
     state.piezoPeak = 0;
   }
 
+  serviceBle();
   serviceWifi();
 }

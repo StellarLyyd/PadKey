@@ -33,6 +33,7 @@ export function CapturePanel({ macMicrophone }: { macMicrophone: MacMicrophoneCo
   const [exporting, setExporting] = useState<"wav" | "mp3" | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const connected = useAppStore((state) => state.serialConnected || state.wifiConnected);
+  const bleConnected = useAppStore((state) => state.bleConnected);
   const sessionRecording = useAppStore((state) => state.sessionRecording);
   const sessionStartedAt = useAppStore((state) => state.sessionStartedAt);
   const sessionEndedAt = useAppStore((state) => state.sessionEndedAt);
@@ -148,6 +149,7 @@ export function CapturePanel({ macMicrophone }: { macMicrophone: MacMicrophoneCo
         </button>
       </div>
       {macMicrophone.error ? <div className="capture-inline-warning">{macMicrophone.error}</div> : null}
+      {bleConnected ? <div className="capture-inline-warning">BLE is showing low-power waveform snapshots. Switch to USB or Wi-Fi before starting a playable PadKey recording.</div> : null}
 
       <div className="audio-stage">
         <AudioWaveform samples={selectedPreview} />

@@ -100,6 +100,7 @@ export function useMacMicrophone(): MacMicrophoneController {
           sampleRate: TARGET_SAMPLE_RATE,
           channels: 1,
           sequence: sequenceRef.current++,
+          recordable: true,
           ts: Date.now()
         });
       };
