@@ -6,8 +6,8 @@ PadKey is an experimental voice and contact-sensing system built around the Seee
 
 The front end lives in [`padkey-studio/`](./padkey-studio/). It provides a human-friendly workflow for:
 
-- connecting a PadKey over USB, low-power BLE, or Wi-Fi;
-- recording independent INMP441, MAX4466, and piezo waveform channels;
+- connecting a PadKey over USB, recordable BLE, or Wi-Fi;
+- recording independent INMP441, MAX4466, and piezo waveform channels over USB/Wi-Fi, or one selectable continuous channel over BLE;
 - recording the MacBook microphone as a baseline comparison;
 - viewing the Charger BFF battery estimate and power state;
 - viewing, listening to, comparing, and trimming waveforms;
@@ -46,7 +46,7 @@ The current three-channel sketch is:
 
 [`padkey-studio/firmware/PadKey_Breadboard_Production/PadKey_Breadboard_Production.ino`](./padkey-studio/firmware/PadKey_Breadboard_Production/PadKey_Breadboard_Production.ino)
 
-It streams 16 kHz signed waveform data for the INMP441, MAX4466 on A5, and a protected piezo input on A8; monitors the Charger BFF on A0; and advertises over BLE as `PadKey-S3`. Follow the adjacent [firmware README](./padkey-studio/firmware/PadKey_Breadboard_Production/README.md) before wiring or uploading it.
+It streams 16 kHz signed waveform data for the INMP441, MAX4466 on A5, and a protected piezo input on A8; monitors the Charger BFF on A0; and advertises over BLE as `PadKey-S3`. BLE carries one selectable, continuous 8 kHz recording channel. Follow the adjacent [firmware README](./padkey-studio/firmware/PadKey_Breadboard_Production/README.md) before wiring or uploading it.
 
 The standalone `.ino`, Python, and Wi-Fi files at the repository root are earlier experiments retained for reference.
 
@@ -54,4 +54,4 @@ The standalone `.ino`, Python, and Wi-Fi files at the repository root are earlie
 
 Do not connect an unprotected piezo directly to the ESP32-S3 analog input. Piezo elements can produce damaging voltage spikes. Use the protection guidance in the production firmware documentation and verify the signal stays inside the board's electrical limits.
 
-Connect only the Charger BFF's divided `A2/BATMON` output to XIAO `A0`; never connect raw battery voltage directly to an ADC pin or place two charger circuits on the same cell.
+Connect only the Charger BFF's divided `A2/BATMON` output to XIAO `A0`; that wire measures the battery but does not power the XIAO. Never connect raw battery voltage directly to an ADC pin or place two charger circuits on the same cell.
