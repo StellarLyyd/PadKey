@@ -9,7 +9,7 @@ export function FirmwareBoundary() {
         <li><Check size={15} aria-hidden="true" /><span>INMP441 packets stay on the digital microphone track</span></li>
         <li><Check size={15} aria-hidden="true" /><span>MAX4466 and piezo packets stay on their own tracks</span></li>
         <li><Check size={15} aria-hidden="true" /><span>MacBook baseline is captured locally and never relabeled as PadKey</span></li>
-        <li><Check size={15} aria-hidden="true" /><span>BLE carries live monitoring; USB and Wi-Fi carry continuous recording audio</span></li>
+        <li><Check size={15} aria-hidden="true" /><span>BLE records one selected channel; USB and Wi-Fi can record all three</span></li>
       </ul>
       <details className="protocol-details">
         <summary><FileCode2 size={15} aria-hidden="true" /> Accepted stream protocol</summary>

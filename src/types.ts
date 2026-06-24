@@ -8,6 +8,9 @@ export interface SensorFrame {
   pz1: number;
   mic: number;
   max4466: number;
+  inmp441Rms: number;
+  max4466Rms: number;
+  piezoRms: number;
   qt: number;
   pz2: number;
   mus: number;
@@ -17,6 +20,8 @@ export interface SensorFrame {
   batteryVoltage: number;
   batteryPercent: number;
   powerMode: "battery" | "usb_or_charging" | "unknown";
+  sourceId: 0 | 1 | 2;
+  sampleRate: number;
   piezo: number;
   noiseFloor: number;
   thresholdMic: number;

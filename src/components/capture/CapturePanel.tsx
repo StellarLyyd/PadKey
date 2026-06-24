@@ -3,6 +3,7 @@ import { Circle, Download, FileAudio, Loader2, Play, RotateCcw, Square } from "l
 import { downloadBlob, encodeMp3, encodeWav, mergePcmChunks, processPcm } from "../../audio/exportAudio";
 import type { ProcessingOptions } from "../../audio/exportAudio";
 import type { MacMicrophoneController } from "../../audio/useMacMicrophone";
+import { bleSourceChannel } from "../../ble/bleProtocol";
 import { exportTelemetryCsv } from "../../audio/exportTelemetry";
 import { useAppStore } from "../../store";
 import { audioChannelLabel, STUDIO_AUDIO_CHANNELS } from "../../studio/audioChannels";
@@ -32,8 +33,9 @@ export function CapturePanel({ macMicrophone }: { macMicrophone: MacMicrophoneCo
   const [now, setNow] = useState(Date.now());
   const [exporting, setExporting] = useState<"wav" | "mp3" | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const connected = useAppStore((state) => state.serialConnected || state.wifiConnected);
+  const connected = useAppStore((state) => state.serialConnected || state.wifiConnected || state.bleConnected);
   const bleConnected = useAppStore((state) => state.bleConnected);
+  const bleActiveSource = useAppStore((state) => state.bleActiveSource);
   const sessionRecording = useAppStore((state) => state.sessionRecording);
   const sessionStartedAt = useAppStore((state) => state.sessionStartedAt);
   const sessionEndedAt = useAppStore((state) => state.sessionEndedAt);
@@ -60,6 +62,10 @@ export function CapturePanel({ macMicrophone }: { macMicrophone: MacMicrophoneCo
     const interval = window.setInterval(() => setNow(Date.now()), 250);
     return () => window.clearInterval(interval);
   }, [sessionRecording]);
+
+  useEffect(() => {
+    if (bleConnected) setSelectedChannel(bleSourceChannel(bleActiveSource));
+  }, [bleActiveSource, bleConnected]);
 
   const selectedChunks = selectedChannel === "inmp441" ? audioChunks : channelAudioChunks[selectedChannel];
   const selectedPreview = selectedChannel === "inmp441" ? audioPreview : channelAudioPreviews[selectedChannel];
@@ -149,7 +155,7 @@ export function CapturePanel({ macMicrophone }: { macMicrophone: MacMicrophoneCo
         </button>
       </div>
       {macMicrophone.error ? <div className="capture-inline-warning">{macMicrophone.error}</div> : null}
-      {bleConnected ? <div className="capture-inline-warning">BLE is showing low-power waveform snapshots. Switch to USB or Wi-Fi before starting a playable PadKey recording.</div> : null}
+      {bleConnected ? <div className="capture-inline-warning">BLE records one selected sensor at 8 kHz. Switch the wireless input in Connect PadKey before starting a new session.</div> : null}
 
       <div className="audio-stage">
         <AudioWaveform samples={selectedPreview} />

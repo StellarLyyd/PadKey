@@ -29,6 +29,8 @@ interface AppState {
   bleDeviceName: string | null;
   bleStatus: "idle" | "connecting" | "connected" | "error";
   bleError: string | null;
+  bleActiveSource: 0 | 1 | 2;
+  bleSampleRate: number;
   batteryVoltage: number | null;
   batteryPercent: number | null;
   powerMode: "battery" | "usb_or_charging" | "unknown";
@@ -99,6 +101,7 @@ interface AppState {
   setSelectedWord: (w: string) => void;
   setBLEConnected: (v: boolean, name?: string) => void;
   setBLEStatus: (status: "idle" | "connecting" | "connected" | "error", error?: string | null) => void;
+  setBleStreamConfig: (sourceId: 0 | 1 | 2, sampleRate?: number) => void;
   setBatteryStatus: (percent: number | null, voltage?: number | null, powerMode?: "battery" | "usb_or_charging" | "unknown") => void;
   setSerialConnected: (v: boolean, name?: string) => void;
   setSerialStatus: (status: "idle" | "connecting" | "connected" | "error", error?: string | null) => void;
@@ -134,6 +137,8 @@ export const useAppStore = create<AppState>((set) => ({
   bleDeviceName: null,
   bleStatus: "idle",
   bleError: null,
+  bleActiveSource: 1,
+  bleSampleRate: 8000,
   batteryVoltage: null,
   batteryPercent: null,
   powerMode: "unknown",
@@ -246,6 +251,8 @@ export const useAppStore = create<AppState>((set) => ({
         batteryVoltage: frame.batteryVoltage > 0 ? frame.batteryVoltage : state.batteryVoltage,
         batteryPercent: frame.powerMode !== "unknown" ? frame.batteryPercent : state.batteryPercent,
         powerMode: frame.powerMode !== "unknown" ? frame.powerMode : state.powerMode,
+        bleActiveSource: frame.source === "ble" ? frame.sourceId : state.bleActiveSource,
+        bleSampleRate: frame.source === "ble" ? frame.sampleRate : state.bleSampleRate,
         samples,
         activeBatchCapture,
         signalBatches,
@@ -374,6 +381,7 @@ export const useAppStore = create<AppState>((set) => ({
       bleConnected: bleStatus === "connected" ? state.bleConnected : false,
       bleDeviceName: bleStatus === "error" || bleStatus === "idle" ? (state.bleConnected ? state.bleDeviceName : null) : state.bleDeviceName
     })),
+  setBleStreamConfig: (bleActiveSource, bleSampleRate = 8000) => set({ bleActiveSource, bleSampleRate }),
   setBatteryStatus: (batteryPercent, batteryVoltage = null, powerMode = "unknown") => set((state) => ({
     batteryPercent: batteryPercent === null ? state.batteryPercent : Math.max(0, Math.min(100, Math.round(batteryPercent))),
     batteryVoltage: batteryVoltage ?? state.batteryVoltage,

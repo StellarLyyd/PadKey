@@ -5,6 +5,7 @@ import { parseBinaryAudio, parseTransportLine } from "../transport/parsePacket";
 const PADKEY_SERVICE_UUID = "7f23c000-2c44-4e7d-9f53-000000000001";
 const TELEMETRY_CHARACTERISTIC_UUID = "7f23c001-2c44-4e7d-9f53-000000000001";
 const AUDIO_CHARACTERISTIC_UUID = "7f23c002-2c44-4e7d-9f53-000000000001";
+const CONTROL_CHARACTERISTIC_UUID = "7f23c003-2c44-4e7d-9f53-000000000001";
 const BATTERY_SERVICE_UUID = 0x180f;
 const BATTERY_LEVEL_CHARACTERISTIC_UUID = 0x2a19;
 const DEVICE_NAME_PREFIX = "PadKey";
@@ -14,6 +15,8 @@ type BLEStatus = "idle" | "connecting" | "connected" | "error";
 export interface BLEController {
   connect: () => Promise<void>;
   disconnect: () => void;
+  setSource: (sourceId: 0 | 1 | 2) => Promise<void>;
+  setStreaming: (enabled: boolean) => Promise<void>;
   status: BLEStatus;
   error: string | null;
 }
@@ -32,22 +35,38 @@ function bleErrorMessage(error: unknown) {
   return error.message || "BLE connection failed";
 }
 
+async function writeControl(
+  characteristic: BluetoothRemoteGATTCharacteristic | null,
+  message: Record<string, unknown>
+) {
+  if (!characteristic) return;
+  const payload = new TextEncoder().encode(JSON.stringify(message));
+  const writable = characteristic as BluetoothRemoteGATTCharacteristic & {
+    writeValueWithoutResponse?: (value: BufferSource) => Promise<void>;
+  };
+  if (writable.writeValueWithoutResponse) await writable.writeValueWithoutResponse(payload);
+  else await characteristic.writeValue(payload);
+}
+
 export function useBLE(): BLEController {
   const deviceRef = useRef<BluetoothDevice | null>(null);
   const telemetryRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
   const audioRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
+  const controlRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
   const batteryRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
   const telemetryBufferRef = useRef("");
   const decoderRef = useRef(new TextDecoder("utf-8"));
 
   const status = useAppStore((state) => state.bleStatus);
   const error = useAppStore((state) => state.bleError);
+  const activeSource = useAppStore((state) => state.bleActiveSource);
   const pushFrame = useAppStore((state) => state.pushFrame);
   const pushAudioPacket = useAppStore((state) => state.pushAudioPacket);
   const setDeviceStatus = useAppStore((state) => state.setDeviceStatus);
   const setBatteryStatus = useAppStore((state) => state.setBatteryStatus);
   const setBLEConnected = useAppStore((state) => state.setBLEConnected);
   const setBLEStatus = useAppStore((state) => state.setBLEStatus);
+  const setBleStreamConfig = useAppStore((state) => state.setBleStreamConfig);
 
   const handleTelemetry = useCallback((event: Event) => {
     const characteristic = event.target as BluetoothRemoteGATTCharacteristic;
@@ -82,6 +101,7 @@ export function useBLE(): BLEController {
   const handleDisconnect = useCallback(() => {
     telemetryRef.current = null;
     audioRef.current = null;
+    controlRef.current = null;
     batteryRef.current = null;
     telemetryBufferRef.current = "";
     deviceRef.current = null;
@@ -116,8 +136,8 @@ export function useBLE(): BLEController {
 
     try {
       const device = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: DEVICE_NAME_PREFIX, services: [PADKEY_SERVICE_UUID] }],
-        optionalServices: [BATTERY_SERVICE_UUID]
+        filters: [{ namePrefix: DEVICE_NAME_PREFIX }],
+        optionalServices: [PADKEY_SERVICE_UUID, BATTERY_SERVICE_UUID]
       });
       deviceRef.current = device;
       device.addEventListener("gattserverdisconnected", handleDisconnect);
@@ -128,12 +148,16 @@ export function useBLE(): BLEController {
       const service = await server.getPrimaryService(PADKEY_SERVICE_UUID);
       const telemetry = await service.getCharacteristic(TELEMETRY_CHARACTERISTIC_UUID);
       const audio = await service.getCharacteristic(AUDIO_CHARACTERISTIC_UUID);
+      const control = await service.getCharacteristic(CONTROL_CHARACTERISTIC_UUID);
       telemetryRef.current = telemetry;
       audioRef.current = audio;
+      controlRef.current = control;
       telemetry.addEventListener("characteristicvaluechanged", handleTelemetry);
       audio.addEventListener("characteristicvaluechanged", handleAudio);
       await telemetry.startNotifications();
       await audio.startNotifications();
+      await writeControl(control, { type: "set_source", sourceId: activeSource });
+      await writeControl(control, { type: "set_streaming", enabled: true });
 
       try {
         const batteryService = await server.getPrimaryService(BATTERY_SERVICE_UUID);
@@ -154,12 +178,22 @@ export function useBLE(): BLEController {
       if (failedDevice?.gatt?.connected) failedDevice.gatt.disconnect();
       telemetryRef.current = null;
       audioRef.current = null;
+      controlRef.current = null;
       batteryRef.current = null;
       telemetryBufferRef.current = "";
       deviceRef.current = null;
       setBLEStatus("error", bleErrorMessage(connectionError));
     }
-  }, [disconnect, handleAudio, handleBattery, handleDisconnect, handleTelemetry, setBatteryStatus, setBLEConnected, setBLEStatus]);
+  }, [activeSource, disconnect, handleAudio, handleBattery, handleDisconnect, handleTelemetry, setBatteryStatus, setBLEConnected, setBLEStatus]);
 
-  return { connect, disconnect, status, error };
+  const setSource = useCallback(async (sourceId: 0 | 1 | 2) => {
+    setBleStreamConfig(sourceId, 8000);
+    await writeControl(controlRef.current, { type: "set_source", sourceId });
+  }, [setBleStreamConfig]);
+
+  const setStreaming = useCallback(async (enabled: boolean) => {
+    await writeControl(controlRef.current, { type: "set_streaming", enabled });
+  }, []);
+
+  return { connect, disconnect, setSource, setStreaming, status, error };
 }

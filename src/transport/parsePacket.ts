@@ -107,8 +107,8 @@ export function parseTransportLine(raw: string, source: TransportKind): Transpor
 // Version 2 adds a uint32 packet sequence at bytes 10-13; PCM begins at 14.
 // Version 3 adds a sensor id at byte 14 (0=INMP441, 1=MAX4466,
 // 2=piezo); PCM begins at byte 15. Version 4 uses the same framing for
-// intentionally sparse BLE monitor audio, which must not be exported as a
-// continuous recording.
+// legacy sparse BLE monitor audio, which must not be exported as a continuous
+// recording. Current firmware uses version 3 for recordable BLE audio.
 export function parseBinaryAudio(buffer: ArrayBuffer): AudioPacket | null {
   if (buffer.byteLength < 12) {
     return null;

@@ -4,7 +4,7 @@ PadKey Studio is the browser workspace for recording, improving, reviewing, and 
 
 ## What it does
 
-- Connects to a XIAO ESP32-S3 over USB, low-power BLE, or a Wi-Fi WebSocket.
+- Connects to a XIAO ESP32-S3 over USB, recordable BLE, or a Wi-Fi WebSocket.
 - Records separate waveform channels from the INMP441 digital microphone, MAX4466 analog microphone, and protected piezo contact sensor.
 - Can record the MacBook's built-in microphone as a baseline channel for comparison.
 - Displays the Charger BFF battery estimate and whether the board appears battery- or externally powered.
@@ -76,7 +76,7 @@ USB and Wi-Fi use the same channel-aware stream contract documented in [PADKEY_S
 
 BLE is enabled by default in the production firmware and advertises as `PadKey-S3`. Install the XIAO's external antenna, choose **Connect PadKey → BLE**, and select `PadKey-S3` in Chrome or Edge.
 
-BLE carries sensor telemetry, battery level, and low-power waveform snapshots. Those snapshots are deliberately not treated as continuous audio, so Studio will not export them as a misleading WAV or MP3. Choose USB or Wi-Fi for playable PadKey recordings.
+BLE carries telemetry, battery level, and one continuous 8 kHz recording channel. Choose INMP441, MAX4466, or piezo before recording. USB and Wi-Fi can carry all three 16 kHz channels at once.
 
 ## Test without hardware
 
@@ -118,13 +118,14 @@ The signal trainer recognizes only phrases represented in its labeled training b
 - **No MacBook baseline:** enable the channel, grant microphone permission, and check the browser's site permissions.
 - **Make text cannot prepare offline:** connect once so the Whisper model can download; playback and export remain available offline.
 - **Choppy recording or dropped packets:** use a data-capable USB cable, avoid a congested hub, or use the firmware's binary Wi-Fi audio mode.
+- **BLE disconnects when USB is unplugged:** the board is losing power. Turn the Charger BFF switch on and verify its JST, shared ground, and 5V power connection. The charge LED is not a battery-power indicator, and A2/BATMON → A0 cannot power the XIAO.
 
 ## Hardware and protocol notes
 
 - Target board: Seeed Studio XIAO ESP32-S3
 - PadKey waveform format: mono signed 16-bit PCM at 16 kHz
 - Sensors: INMP441 over I2S, MAX4466 on A5, protected piezo input on A8
-- BLE is the low-power monitoring path; USB and Wi-Fi are the continuous recording paths.
+- BLE is the wireless single-channel recording path; USB and Wi-Fi support continuous multi-channel capture.
 - Do not connect an unprotected piezo directly to the ESP32-S3 analog input. Follow the protection guidance in the firmware README.
 
 See [PADKEY_STREAM_PROTOCOL.md](./PADKEY_STREAM_PROTOCOL.md) for packet formats and [FRONTEND_SIX_CHANNEL_CAPTURE_CODE.md](./FRONTEND_SIX_CHANNEL_CAPTURE_CODE.md) for additional capture notes.
