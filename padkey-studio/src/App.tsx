@@ -72,7 +72,7 @@ export function App() {
   const statusLabel = !connected
     ? "PadKey not connected"
     : bleConnected
-      ? rawAudioLive ? "PadKey connected · BLE preview" : "PadKey connected · BLE signal"
+      ? recordableAudioLive ? "PadKey connected · BLE recording ready" : rawAudioLive ? "PadKey connected · BLE signal" : "PadKey connected · Waiting for BLE audio"
     : droppedAudioPackets
       ? "PadKey connected · Check signal"
       : recordableAudioLive
