@@ -64,6 +64,18 @@ final class StudioWebViewController: NSViewController, WKNavigationDelegate, WKU
         }
     }
 
+    func openAdvanced(_ section: String = "signals") {
+        let url = URL(string: "http://127.0.0.1:8789/studio/#advanced/\(section)")!
+        if webView.url == nil {
+            webView.load(URLRequest(url: url))
+        } else {
+            webView.evaluateJavaScript("""
+            window.location.hash = 'advanced/\(section)';
+            window.dispatchEvent(new CustomEvent('padkey-native-route', { detail: { area: 'advanced', advancedView: '\(section)' } }));
+            """)
+        }
+    }
+
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,

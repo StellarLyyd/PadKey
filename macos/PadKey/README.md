@@ -16,6 +16,9 @@ It is designed for the awkward part of voice typing on macOS: getting polished t
 - Inserts the final transcript into the text field that was active when recording started.
 - Uses layered insertion: Accessibility selected text, Accessibility value range, current focus retry, System Events paste, global keyboard typing, targeted keyboard typing, then clipboard paste with pasteboard restoration.
 - Logs the insertion strategy, target app, latency, ASR engine, polish provider, and fallback reason for each dictation.
+- Lets you choose the actual fn dictation/control source: PadKey BLE/USB hardware channels or the MacBook microphone. Hardware selection never silently falls back to the MacBook mic.
+- Shows a native Signal Monitor with transport, selected channel, BLE status, packet timing, sample rate, battery level, source truth, and capture history.
+- Saves capture audio under Application Support for playback/debug when hardware or local Whisper recording is used.
 - Stores the optional Gemini API key in macOS Keychain and shows masked API key usage details in Settings.
 - Provides a local Mac Action agent for Notes, FaceTime preparation, browser tasks, and generic accessible fields and buttons.
 - Requires confirmation before consequential actions such as beginning a FaceTime call.
@@ -78,11 +81,11 @@ The run script builds, signs, installs, and launches PadKey from:
 
 That stable app path matters. macOS Privacy permissions attach to the signed app bundle, so running from a changing build or `dist/` path can make universal insertion appear broken even when transcription works.
 
-The app appears in the Dock and menu bar as `pad`. Hold fn, or press Option-Space, speak, then release fn or press Option-Space again to insert the text into the field that was active when recording started.
+The app appears in the Dock and menu bar as `pad`. Choose **Signal Monitor** and select `PadKey BLE · INMP441`, `PadKey BLE · MAX4466`, `PadKey USB · INMP441`, or `MacBook microphone`. Hold fn, or press Option-Space, speak into the selected source, then release fn or press Option-Space again to transcribe and insert the text into the field that was active when recording started.
 
 Use the Hub's Pipeline tab to inspect recent sessions. It shows the target app, recognition engine, insertion strategy, Mega retry usage, and insertion latency.
 
-Open **Mac Control** in the sidebar or use Studio's **Advanced → Mac control** panel. The combined app exposes a loopback-only API at `http://127.0.0.1:8789`, leaving OwoFlow's standalone `8788` endpoint independent. Check `GET /health` and `GET /permissions`, submit `POST /command`, and complete approved actions with `POST /confirm`.
+Open **Agent Control** in the sidebar or use Studio's **Advanced → Mac control** panel. The combined app exposes a loopback-only API at `http://127.0.0.1:8789`, leaving OwoFlow's standalone `8788` endpoint independent. Check `GET /health` and `GET /permissions`, submit `POST /command`, and complete approved actions with `POST /confirm`.
 
 Open the Hub or Settings directly while developing:
 

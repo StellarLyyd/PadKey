@@ -55,7 +55,13 @@ final class PadKeyStore {
         usedRobustRetry: Bool? = nil,
         polishUsed: Bool? = nil,
         polishProvider: String? = nil,
-        latency: PipelineLatency? = nil
+        latency: PipelineLatency? = nil,
+        inputSource: PadKeyInputSource? = nil,
+        processedTranscript: String? = nil,
+        interpretedCommand: String? = nil,
+        actionTaken: String? = nil,
+        confidenceStatus: String? = nil,
+        audioURL: URL? = nil
     ) -> TranscriptRecord {
         let wordCount = Self.wordCount(text)
         let storedRawText = pipelineSettings.keepRawHistory ? rawText : ""
@@ -76,7 +82,13 @@ final class PadKeyStore {
             usedRobustRetry: usedRobustRetry,
             polishUsed: polishUsed,
             polishProvider: polishProvider,
-            latency: latency
+            latency: latency,
+            inputSource: inputSource ?? selectedInputSource,
+            processedTranscript: processedTranscript,
+            interpretedCommand: interpretedCommand,
+            actionTaken: actionTaken,
+            confidenceStatus: confidenceStatus,
+            audioPath: audioURL?.path
         )
 
         snapshot.history.insert(record, at: 0)
@@ -168,6 +180,20 @@ final class PadKeyStore {
         save()
     }
 
+    func updateHistoryCommand(id: UUID, interpretedCommand: String?, actionTaken: String?, confidenceStatus: String?) {
+        guard let index = snapshot.history.firstIndex(where: { $0.id == id }) else { return }
+        if let interpretedCommand {
+            snapshot.history[index].interpretedCommand = interpretedCommand
+        }
+        if let actionTaken {
+            snapshot.history[index].actionTaken = actionTaken
+        }
+        if let confidenceStatus {
+            snapshot.history[index].confidenceStatus = confidenceStatus
+        }
+        save()
+    }
+
     @discardableResult
     func addVoiceSyncSample(prompt: String, transcript: String, duration: TimeInterval) -> VoiceSyncSample {
         let sample = VoiceSyncSample(
@@ -196,6 +222,15 @@ final class PadKeyStore {
         update(&settings)
         snapshot.pipelineSettings = settings.normalized()
         save()
+    }
+
+    func setSelectedInputSource(_ source: PadKeyInputSource) {
+        snapshot.selectedInputSource = source
+        if let channel = source.channel {
+            PadKeyHardwareAudioService.shared.setSelectedChannel(channel)
+        }
+        save()
+        NotificationCenter.default.post(name: .padKeyInputSourceDidChange, object: self)
     }
 
     func setGeminiAPIKey(_ key: String) {
@@ -327,6 +362,10 @@ final class PadKeyStore {
         (snapshot.pipelineSettings ?? .defaults).normalized()
     }
 
+    var selectedInputSource: PadKeyInputSource {
+        snapshot.selectedInputSource ?? .defaultHardware
+    }
+
     var voiceSyncSamples: [VoiceSyncSample] {
         snapshot.voiceSyncSamples ?? []
     }
@@ -416,6 +455,7 @@ struct PadKeySnapshot: Codable {
     var geminiKeyStored: Bool?
     var geminiKeyDetails: GeminiKeyDetails?
     var geminiUsage: GeminiUsage
+    var selectedInputSource: PadKeyInputSource?
 
     static func defaults() -> PadKeySnapshot {
         PadKeySnapshot(
@@ -444,7 +484,8 @@ struct PadKeySnapshot: Codable {
             geminiAPIKey: "",
             geminiKeyStored: false,
             geminiKeyDetails: nil,
-            geminiUsage: GeminiUsage(totalRequests: 0, estimatedInputTokens: 0, estimatedOutputTokens: 0, lastUsedAt: nil, lastError: nil)
+            geminiUsage: GeminiUsage(totalRequests: 0, estimatedInputTokens: 0, estimatedOutputTokens: 0, lastUsedAt: nil, lastError: nil),
+            selectedInputSource: .defaultHardware
         )
     }
 
@@ -456,6 +497,7 @@ struct PadKeySnapshot: Codable {
         if copy.transforms.isEmpty { copy.transforms = defaults.transforms }
         if copy.voiceSyncSamples == nil { copy.voiceSyncSamples = [] }
         if copy.pipelineSettings == nil { copy.pipelineSettings = .defaults }
+        if copy.selectedInputSource == nil { copy.selectedInputSource = .defaultHardware }
         copy.pipelineSettings = copy.pipelineSettings?.normalized()
         if copy.geminiKeyStored == nil { copy.geminiKeyStored = !copy.geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         if let details = copy.geminiKeyDetails {
@@ -491,6 +533,12 @@ struct TranscriptRecord: Codable, Identifiable {
     var polishUsed: Bool?
     var polishProvider: String?
     var latency: PipelineLatency?
+    var inputSource: PadKeyInputSource?
+    var processedTranscript: String?
+    var interpretedCommand: String?
+    var actionTaken: String?
+    var confidenceStatus: String?
+    var audioPath: String?
 }
 
 struct ScratchNote: Codable, Identifiable {

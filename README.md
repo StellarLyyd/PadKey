@@ -4,7 +4,7 @@ PadKey is a voice, contact-sensing, dictation, and Mac-control system built arou
 
 ## PadKey for macOS
 
-The standalone native app lives in [`macos/PadKey/`](./macos/PadKey/). It combines the complete PadKey Studio workflow with local dictation, cross-app text insertion, Notes and browser actions, confirmed FaceTime preparation, Scratchpad, personal vocabulary, voice setup, and pipeline diagnostics.
+The standalone native app lives in [`macos/PadKey/`](./macos/PadKey/). It combines the complete PadKey Studio workflow with local dictation, cross-app text insertion, Notes and browser actions, confirmed FaceTime preparation, Scratchpad, personal vocabulary, signal monitoring, Agent Control, and pipeline diagnostics.
 
 It is a separate application with bundle identifier `com.stellarlyyd.padkey`. Installing it does not replace the standalone OwoFlow app or the browser-only PadKey Studio.
 
@@ -17,6 +17,8 @@ cd PadKey/macos/PadKey
 ```
 
 The script builds the sibling Studio frontend, embeds it in the native app, installs `~/Applications/PadKey.app`, and launches it. The native bridge supplies USB serial and BLE access that WebKit does not expose; Wi-Fi continues through the Studio WebSocket transport.
+
+Inside the native app, choose the dictation/control input under **Signal Monitor**, **Dictation**, or **Settings**. Selecting `PadKey BLE · INMP441` or `PadKey BLE · MAX4466` makes fn capture use the breadboard stream instead of the MacBook microphone. MacBook microphone capture is only used when explicitly selected.
 
 ## PadKey Studio
 

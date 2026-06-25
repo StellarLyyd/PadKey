@@ -55,6 +55,31 @@ export function App() {
     return () => window.clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    function applyHashRoute() {
+      const hash = window.location.hash.replace(/^#\/?/, "").toLowerCase();
+      if (!hash) return;
+      if (hash.startsWith("advanced")) {
+        setArea("advanced");
+        const requested = hash.split("/")[1] as AdvancedView | undefined;
+        if (requested && ["signals", "trainer", "speech", "agent", "learn"].includes(requested)) {
+          setAdvancedView(requested);
+        }
+      } else if (hash.startsWith("studio")) {
+        setArea("studio");
+      }
+    }
+
+    applyHashRoute();
+    window.addEventListener("hashchange", applyHashRoute);
+    window.addEventListener("padkey-native-route", ((event: Event) => {
+      const detail = (event as CustomEvent<{ area?: "studio" | "advanced"; advancedView?: AdvancedView }>).detail;
+      if (detail?.area) setArea(detail.area);
+      if (detail?.advancedView) setAdvancedView(detail.advancedView);
+    }) as EventListener);
+    return () => window.removeEventListener("hashchange", applyHashRoute);
+  }, []);
+
   const fps = useMemo(() => frameHistory.filter((frame) => frame.ts >= now - 1000).length, [frameHistory, now]);
   const connected = serialConnected || wifiConnected || bleConnected;
   const source = latestFrame?.source === "wifi" ? "Wi-Fi" : latestFrame?.source === "serial" ? "USB" : latestFrame?.source === "ble" ? "BLE" : serialConnected ? "USB" : wifiConnected ? "Wi-Fi" : bleConnected ? "BLE" : "Offline";

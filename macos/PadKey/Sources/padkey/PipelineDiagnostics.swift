@@ -70,6 +70,8 @@ struct DictationResult {
     var usedRobustRetry: Bool
     var fallbackReason: String?
     var asrDuration: TimeInterval?
+    var inputSource: PadKeyInputSource? = nil
+    var audioURL: URL? = nil
 }
 
 enum TranscriptQuality {

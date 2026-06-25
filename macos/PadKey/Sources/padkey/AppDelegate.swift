@@ -280,20 +280,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         dictationController.recognitionEngine = engine
         dictationController.prefersLocalWhisper = prefersLocalWhisper
         dictationController.robustRetryEnabled = store.pipelineSettings.effectiveRobustRetryEnabled
+        dictationController.inputSource = store.selectedInputSource
 
-        let status = listeningStatus(for: engine)
+        let source = store.selectedInputSource
+        let status = source.isPadKeyHardware ? "Listening from \(source.displayName)" : listeningStatus(for: engine)
         let help = listeningHelp(for: engine)
         let targetName = targetInsertionField?.appName ?? targetApplication?.localizedName
-        floatingBar.setStatus(status, detail: targetName.map { "\(help) Target: \($0)." } ?? help)
+        let sourceHelp = source.isPadKeyHardware ? "\(source.statusDetail) Release fn to transcribe." : help
+        floatingBar.setStatus(status, detail: targetName.map { "\(sourceHelp) Target: \($0)." } ?? sourceHelp)
         scheduleRecordingTimeout()
 
         dictationController.start(
             onPartial: { [weak self] transcript in
                 guard let self else { return }
                 let displayText = self.process(transcript)
-                let statusText = displayText.localizedCaseInsensitiveContains("Transcribing")
-                    ? "Transcribing offline..."
-                    : self.listeningStatus(for: self.store.pipelineSettings.effectiveRecognitionEngine)
+                let statusText: String
+                if displayText.localizedCaseInsensitiveContains("Transcribing") {
+                    statusText = "Transcribing offline..."
+                } else if self.store.selectedInputSource.isPadKeyHardware {
+                    statusText = "Listening from \(self.store.selectedInputSource.displayName)"
+                } else {
+                    statusText = self.listeningStatus(for: self.store.pipelineSettings.effectiveRecognitionEngine)
+                }
                 self.floatingBar.setStatus(statusText, detail: displayText.isEmpty ? "Speak naturally." : displayText)
             },
             onMeter: { [weak self] frame in
@@ -342,22 +350,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
            MacCommandParser.looksLikeVoiceCommand(processedTranscript)
         {
             floatingBar.setStatus("Working...", detail: processedTranscript)
+            let commandSource = result.inputSource ?? store.selectedInputSource
+            let commandRecord = store.addHistory(
+                text: processedTranscript,
+                rawText: rawTranscript,
+                appName: deliveryContext.targetApplication?.localizedName ?? "PadKey",
+                duration: Date().timeIntervalSince(deliveryContext.recordingStartedAt ?? Date()),
+                targetBundleID: deliveryContext.targetApplication?.bundleIdentifier,
+                inserted: nil,
+                insertionStrategy: nil,
+                insertionError: nil,
+                recognitionEngine: result.engine.displayName,
+                usedRobustRetry: result.usedRobustRetry,
+                polishUsed: false,
+                polishProvider: nil,
+                latency: PipelineLatency(recordingDuration: Date().timeIntervalSince(deliveryContext.recordingStartedAt ?? Date()), asrDuration: result.asrDuration, polishDuration: nil, insertionDuration: nil, totalDuration: nil),
+                inputSource: commandSource,
+                processedTranscript: processedTranscript,
+                interpretedCommand: processedTranscript,
+                actionTaken: nil,
+                confidenceStatus: result.fallbackReason,
+                audioURL: result.audioURL
+            )
             let request = MacCommandRequest(
                 transcript: processedTranscript,
-                source: "padkey_microphone",
-                batteryPercent: nil,
+                source: commandSource.commandSource,
+                batteryPercent: PadKeyHardwareAudioService.shared.status.batteryPercent,
                 mode: "mac_control"
             )
-            commandCoordinator.execute(request: request, preferredApplication: deliveryContext.targetApplication) { [weak self] response in
+            commandCoordinator.execute(request: request, preferredApplication: deliveryContext.targetApplication) { response in
                 DispatchQueue.main.async {
-                    guard let self else { return }
-                    self.lastTranscript = processedTranscript
-                    self.floatingBar.flash(
+                    guard let appDelegate = AppDelegate.shared else { return }
+                    appDelegate.lastTranscript = processedTranscript
+                    appDelegate.store.updateHistoryCommand(
+                        id: commandRecord.id,
+                        interpretedCommand: processedTranscript,
+                        actionTaken: response.spoken,
+                        confidenceStatus: response.confirmationRequired ? "Confirmation required" : response.ok ? "Command executed" : "Command failed"
+                    )
+                    appDelegate.floatingBar.flash(
                         response.confirmationRequired ? "Confirmation needed" : response.ok ? "PadKey action complete" : "PadKey needs attention",
                         detail: response.spoken
                     )
                     if response.permissionRequired != nil || response.clarification != nil || response.confirmationRequired {
-                        self.openHub(page: "Agent Control")
+                        appDelegate.openHub(page: "Agent Control")
                     }
                 }
             }
@@ -424,7 +460,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             usedRobustRetry: dictationResult.usedRobustRetry,
             polishUsed: polishResult != nil,
             polishProvider: polishResult?.provider,
-            latency: latency
+            latency: latency,
+            inputSource: dictationResult.inputSource ?? store.selectedInputSource,
+            processedTranscript: processedTranscript,
+            interpretedCommand: MacCommandParser.looksLikeVoiceCommand(processedTranscript) ? processedTranscript : nil,
+            actionTaken: nil,
+            confidenceStatus: dictationResult.fallbackReason,
+            audioURL: dictationResult.audioURL
         )
 
         if insertIntoActiveApp, let targetField {

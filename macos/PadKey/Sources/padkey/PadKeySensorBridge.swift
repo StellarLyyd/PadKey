@@ -32,6 +32,7 @@ final class PadKeySensorBridge: NSObject, WKScriptMessageHandler, CBCentralManag
             writeControl(["type": "set_streaming", "enabled": enabled])
         case "setBLESource":
             let sourceID = body["sourceId"] as? Int ?? 0
+            PadKeyHardwareAudioService.shared.setSelectedChannel(PadKeySensorChannel.fromBLESourceId(sourceID))
             writeControl(["type": "set_source", "sourceId": sourceID])
         case "connectSerial":
             connectSerial(baudRate: body["baudRate"] as? Int ?? 921_600)
@@ -60,6 +61,7 @@ final class PadKeySensorBridge: NSObject, WKScriptMessageHandler, CBCentralManag
         if let peripheral { central.cancelPeripheralConnection(peripheral) }
         peripheral = nil
         controlCharacteristic = nil
+        PadKeyHardwareAudioService.shared.updateBLEConnection(connected: false)
         emit(type: "ble-status", values: ["status": "disconnected"])
     }
 
@@ -85,12 +87,14 @@ final class PadKeySensorBridge: NSObject, WKScriptMessageHandler, CBCentralManag
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        PadKeyHardwareAudioService.shared.updateBLEConnection(connected: false, error: error?.localizedDescription ?? "PadKey BLE connection failed.")
         emit(type: "ble-status", values: ["status": "error", "message": error?.localizedDescription ?? "PadKey BLE connection failed."])
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         self.peripheral = nil
         controlCharacteristic = nil
+        PadKeyHardwareAudioService.shared.updateBLEConnection(connected: false, error: error?.localizedDescription)
         emit(type: "ble-status", values: ["status": error == nil ? "disconnected" : "error", "message": error?.localizedDescription ?? ""])
     }
 
@@ -125,6 +129,7 @@ final class PadKeySensorBridge: NSObject, WKScriptMessageHandler, CBCentralManag
             }
         }
         if service.uuid == Self.serviceUUID {
+            PadKeyHardwareAudioService.shared.updateBLEConnection(connected: true)
             emit(type: "ble-status", values: ["status": "connected", "name": peripheral.name ?? "PadKey-S3"])
         }
     }
@@ -135,9 +140,13 @@ final class PadKeySensorBridge: NSObject, WKScriptMessageHandler, CBCentralManag
         case Self.telemetryUUID:
             emit(type: "ble-telemetry", values: ["text": String(data: data, encoding: .utf8) ?? ""])
         case Self.audioUUID:
+            PadKeyHardwareAudioService.shared.handleBLEAudio(data)
             emit(type: "ble-audio", values: ["base64": data.base64EncodedString()])
         case Self.batteryLevelUUID:
-            if let level = data.first { emit(type: "ble-battery", values: ["percent": Int(level)]) }
+            if let level = data.first {
+                PadKeyHardwareAudioService.shared.updateBattery(percent: Int(level))
+                emit(type: "ble-battery", values: ["percent": Int(level)])
+            }
         default: break
         }
     }
@@ -156,6 +165,7 @@ final class PadKeySensorBridge: NSObject, WKScriptMessageHandler, CBCentralManag
             $0.hasPrefix("cu.usbmodem") || $0.hasPrefix("cu.usbserial") || $0.hasPrefix("cu.wchusbserial") || $0.hasPrefix("cu.SLAB_USBtoUART")
         }.sorted()
         guard let name = names.first else {
+            PadKeyHardwareAudioService.shared.updateUSBConnection(connected: false, error: "No PadKey USB serial device was found.")
             emit(type: "serial-status", values: ["status": "error", "message": "No PadKey USB serial device was found."])
             return
         }
@@ -170,13 +180,16 @@ final class PadKeySensorBridge: NSObject, WKScriptMessageHandler, CBCentralManag
             let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
             serialHandle = handle
             serialPath = path
+            PadKeyHardwareAudioService.shared.updateUSBConnection(connected: true)
             handle.readabilityHandler = { [weak self] source in
                 let data = source.availableData
                 guard !data.isEmpty else { return }
+                PadKeyHardwareAudioService.shared.handleSerialData(data)
                 self?.emit(type: "serial-data", values: ["base64": data.base64EncodedString()])
             }
             emit(type: "serial-status", values: ["status": "connected", "name": name])
         } catch {
+            PadKeyHardwareAudioService.shared.updateUSBConnection(connected: false, error: error.localizedDescription)
             emit(type: "serial-status", values: ["status": "error", "message": "Could not open \(name): \(error.localizedDescription)"])
         }
     }
@@ -186,6 +199,7 @@ final class PadKeySensorBridge: NSObject, WKScriptMessageHandler, CBCentralManag
         try? serialHandle?.close()
         serialHandle = nil
         serialPath = nil
+        PadKeyHardwareAudioService.shared.updateUSBConnection(connected: false)
         emit(type: "serial-status", values: ["status": "disconnected"])
     }
 

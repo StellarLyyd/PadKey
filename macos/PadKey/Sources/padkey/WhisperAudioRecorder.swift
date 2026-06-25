@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
 
-final class WhisperAudioRecorder {
+final class WhisperAudioRecorder: DictationAudioRecorder {
     private let audioEngine = AVAudioEngine()
     private let recordingQueue = DispatchQueue(label: "com.stellarlyyd.padkey.whisper-recorder")
 
@@ -44,9 +44,7 @@ final class WhisperAudioRecorder {
             throw WhisperRecordingError.outputFormatUnavailable
         }
 
-        let temporaryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("padkey-\(UUID().uuidString)")
-            .appendingPathExtension("wav")
+        let temporaryURL = try PadKeyAudioFileWriter.newCaptureURL(prefix: "system-microphone")
 
         FileManager.default.createFile(atPath: temporaryURL.path, contents: Self.wavHeader(dataSize: 0))
         let handle = try FileHandle(forWritingTo: temporaryURL)

@@ -10,10 +10,13 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
     private enum Page: String, CaseIterable {
         case studio = "Studio"
         case home = "Overview"
+        case pipeline = "Dictation"
+        case agent = "Agent Control"
+        case signalMonitor = "Signal Monitor"
+        case advanced = "Advanced"
+        case help = "Help / How PadKey Works"
         case insights = "Insights"
         case sync = "Voice Setup"
-        case pipeline = "Dictation"
-        case agent = "Mac Control"
         case dictionary = "Dictionary"
         case snippets = "Snippets"
         case style = "Style"
@@ -29,6 +32,9 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
             case .sync: return "waveform.badge.mic"
             case .pipeline: return "point.3.connected.trianglepath.dotted"
             case .agent: return "command"
+            case .signalMonitor: return "waveform.path.ecg"
+            case .advanced: return "slider.horizontal.3"
+            case .help: return "questionmark.circle"
             case .dictionary: return "doc.text.magnifyingglass"
             case .snippets: return "scissors"
             case .style: return "textformat"
@@ -72,6 +78,9 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
     private weak var syncRecordButton: HoverButton?
     private weak var syncMeterView: SyncMeterView?
     private weak var agentCommandField: NSTextField?
+    private var hardwareStatus = PadKeyHardwareAudioService.shared.status
+    private let speechSynthesizer = NSSpeechSynthesizer()
+    private var capturePlaybackSound: NSSound?
     private var didCenterOnFirstShow = false
 
     init(store: PadKeyStore = .shared) {
@@ -95,6 +104,18 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
             self,
             selector: #selector(agentControlDidUpdate),
             name: .padKeyAgentControlDidUpdate,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(hardwareStreamDidUpdate(_:)),
+            name: .padKeyHardwareStreamDidUpdate,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(inputSourceDidChange),
+            name: .padKeyInputSourceDidChange,
             object: nil
         )
         render()
@@ -346,11 +367,15 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
     private func render() {
         contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
-        let showsStudio = page == .studio
+        let showsStudio = page == .studio || page == .advanced
         contentScrollView.isHidden = showsStudio
         studioController.view.isHidden = !showsStudio
         if showsStudio {
-            studioController.loadStudioIfNeeded()
+            if page == .advanced {
+                studioController.openAdvanced("signals")
+            } else {
+                studioController.loadStudioIfNeeded()
+            }
             return
         }
 
@@ -367,6 +392,12 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
             renderPipeline()
         case .agent:
             renderAgentControl()
+        case .signalMonitor:
+            renderSignalMonitor()
+        case .advanced:
+            break
+        case .help:
+            renderHelp()
         case .dictionary:
             renderDictionary()
         case .snippets:
@@ -457,6 +488,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         contentStack.addArrangedSubview(title("Pipeline"))
         contentStack.addArrangedSubview(subtitle("Voice capture, transcription, cleanup, context, and insertion are visible here so the system feels observable instead of magical."))
         contentStack.addArrangedSubview(pipelineStatusStrip())
+        contentStack.addArrangedSubview(inputSourcePanel())
         contentStack.addArrangedSubview(pipelineMap())
         contentStack.addArrangedSubview(recognitionStrategyPanel())
         contentStack.addArrangedSubview(sectionLabel("CONTROL SURFACE"))
@@ -534,17 +566,263 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         contentStack.addArrangedSubview(title("Settings"))
         contentStack.addArrangedSubview(subtitle("Your local dictation surface, model choices, AI polish, and insertion behavior in one place."))
         contentStack.addArrangedSubview(settingsSummaryStrip())
+        contentStack.addArrangedSubview(inputSourcePanel())
+        contentStack.addArrangedSubview(permissionStatusTable())
         contentStack.addArrangedSubview(settingsBlock())
     }
 
     private func renderAgentControl() {
         contentStack.addArrangedSubview(title("Agent Control"))
-        contentStack.addArrangedSubview(subtitle("Turn an explicit “Hey PadKey…” command into a safe action inside the selected Mac app."))
+        contentStack.addArrangedSubview(subtitle("Turn speech from the selected input source into safe Mac actions. Current source: \(store.selectedInputSource.displayName)."))
+        contentStack.addArrangedSubview(inputSourcePanel())
         contentStack.addArrangedSubview(agentCommandComposer())
         contentStack.addArrangedSubview(sectionLabel("CURRENT ACTION"))
         contentStack.addArrangedSubview(agentActionStatus())
+        contentStack.addArrangedSubview(sectionLabel("SUPPORTED ACTIONS"))
+        contentStack.addArrangedSubview(agentSupportedActionsTable())
         contentStack.addArrangedSubview(sectionLabel("PRODUCTION TESTS"))
         contentStack.addArrangedSubview(agentTestActions())
+    }
+
+    private func renderSignalMonitor() {
+        let status = hardwareStatus
+        let source = store.selectedInputSource
+        contentStack.addArrangedSubview(title("Signal Monitor"))
+        contentStack.addArrangedSubview(subtitle("This page makes the source obvious: PadKey hardware streams are separate from the MacBook microphone. fn uses the selected source below."))
+        contentStack.addArrangedSubview(inputSourcePanel())
+
+        let metrics = NSStackView()
+        metrics.orientation = .horizontal
+        metrics.spacing = 18
+        metrics.addArrangedSubview(metricCard(value: source.transportName, label: "active transport"))
+        metrics.addArrangedSubview(metricCard(value: source.channel?.displayName ?? "System", label: "selected channel"))
+        metrics.addArrangedSubview(metricCard(value: source.isPadKeyHardware ? "PadKey hardware" : "MacBook mic", label: "actual source"))
+        contentStack.addArrangedSubview(metrics)
+
+        let signalMetrics = NSStackView()
+        signalMetrics.orientation = .horizontal
+        signalMetrics.spacing = 18
+        signalMetrics.addArrangedSubview(metricCard(value: status.bleConnected ? "Connected" : "Disconnected", label: "BLE status"))
+        signalMetrics.addArrangedSubview(metricCard(value: status.sampleRate > 0 ? "\(status.sampleRate) Hz" : "-", label: "sample rate"))
+        signalMetrics.addArrangedSubview(metricCard(value: status.batteryPercent.map { "\($0)%" } ?? "-", label: "battery"))
+        contentStack.addArrangedSubview(signalMetrics)
+
+        contentStack.addArrangedSubview(signalStatusPanel())
+        contentStack.addArrangedSubview(sectionLabel("RECENT CAPTURES"))
+        contentStack.addArrangedSubview(captureHistoryTable())
+    }
+
+    private func renderHelp() {
+        contentStack.addArrangedSubview(title("How PadKey Works"))
+        contentStack.addArrangedSubview(subtitle("The simple version: PadKey listens where your laptop cannot, then the Mac app turns that capture into text or safe actions."))
+        contentStack.addArrangedSubview(simpleList([
+            "PadKey captures low-volume, whispered, and subvocal-style speech using the breadboard or wearable microphone.",
+            "The ESP32-S3 sends the selected sensor stream over Bluetooth, USB, or Wi‑Fi.",
+            "The macOS app receives that PadKey stream natively, not just inside the Studio browser view.",
+            "The selected input source controls dictation and agent commands. MacBook microphone capture is only used when explicitly selected.",
+            "Press and hold fn to capture from the selected source. Release fn to transcribe and act.",
+            "If the transcript looks like a command, Agent Control maps it to Mac actions such as open app, click, type, copy, paste, scroll, and close window.",
+            "Signal Monitor shows the actual incoming PadKey signal so you can verify whether audio came from hardware or the MacBook mic."
+        ]))
+        contentStack.addArrangedSubview(sectionLabel("PERMISSIONS"))
+        contentStack.addArrangedSubview(permissionStatusTable())
+    }
+
+    private func inputSourcePanel() -> NSView {
+        let panel = RoundedView(fillColor: PadKeyTheme.panelBackground, radius: 12, strokeColor: NSColor.separatorColor.withAlphaComponent(0.42), strokeWidth: 1)
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        panel.heightAnchor.constraint(greaterThanOrEqualToConstant: 150).isActive = true
+
+        let titleLabel = NSTextField(labelWithString: "Dictation and command input")
+        titleLabel.font = .systemFont(ofSize: 17, weight: .bold)
+        titleLabel.textColor = PadKeyTheme.ink
+
+        let detail = NSTextField(wrappingLabelWithString: "\(store.selectedInputSource.displayName). \(store.selectedInputSource.statusDetail)")
+        detail.font = .systemFont(ofSize: 12, weight: .medium)
+        detail.textColor = PadKeyTheme.secondaryInk
+        detail.maximumNumberOfLines = 2
+
+        let options = NSStackView()
+        options.orientation = .horizontal
+        options.spacing = 8
+        let sources: [(String, PadKeyInputSource)] = [
+            ("BLE · INMP441", .padKeyBLE(channel: .inmp441)),
+            ("BLE · MAX4466", .padKeyBLE(channel: .max4466)),
+            ("BLE · Piezo", .padKeyBLE(channel: .piezo)),
+            ("USB · INMP441", .padKeyUSB(channel: .inmp441)),
+            ("MacBook mic", .systemAudio(deviceID: nil))
+        ]
+        for (label, source) in sources {
+            let button = pipelineOptionButton(
+                title: label,
+                identifier: "input-\(source.commandSource)",
+                selected: store.selectedInputSource == source,
+                action: #selector(selectInputSource(_:))
+            )
+            button.widthAnchor.constraint(greaterThanOrEqualToConstant: 96).isActive = true
+            options.addArrangedSubview(button)
+        }
+
+        [titleLabel, detail, options].forEach {
+            panel.addSubview($0)
+            $0.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        NSLayoutConstraint.activate([
+            titleLabel.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 18),
+            titleLabel.topAnchor.constraint(equalTo: panel.topAnchor, constant: 18),
+            detail.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            detail.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -18),
+            detail.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
+            options.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            options.trailingAnchor.constraint(lessThanOrEqualTo: panel.trailingAnchor, constant: -18),
+            options.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 16),
+            options.bottomAnchor.constraint(lessThanOrEqualTo: panel.bottomAnchor, constant: -18)
+        ])
+
+        return panel
+    }
+
+    private func signalStatusPanel() -> NSView {
+        let status = hardwareStatus
+        let lastPacket = status.lastPacketAt.map { RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: Date()) } ?? "No packet yet"
+        let rows = [
+            ("Active input", store.selectedInputSource.displayName),
+            ("Hardware stream", status.bleConnected || status.usbConnected || status.wifiConnected ? "Connected" : "Not connected"),
+            ("Last packet", lastPacket),
+            ("Packet count", "\(status.packetCount)"),
+            ("Latest channel", status.lastChannel?.displayName ?? "-"),
+            ("Live meter", "Peak \(status.latestPeak) · RMS \(Int(status.latestRMS.rounded()))"),
+            ("Source truth", store.selectedInputSource.isPadKeyHardware ? "PadKey hardware, not MacBook microphone" : "MacBook/system microphone")
+        ]
+        return settingsCard(title: "Stream status", rows: rows, height: 272)
+    }
+
+    private func agentSupportedActionsTable() -> NSView {
+        let actions: [(String, String, String, String, String, String)] = [
+            ("Open app", "Open Safari / Open FaceTime", "Launches a named app", "Implemented", "None", "Global"),
+            ("Prepare FaceTime call", "Prepare FaceTime call", "Opens FaceTime and stages the call flow", "Implemented", "Accessibility", "Global"),
+            ("Make a note", "Make a note ...", "Creates a local PadKey note", "Implemented", "None", "Global"),
+            ("Search web", "Search for assistive speech devices", "Opens browser search", "Implemented", "None", "Global"),
+            ("Type text", "Type this into the selected field", "Inserts transcript into focused editor", "Implemented", "Accessibility", "Global"),
+            ("Click target", "Click the input field", "Clicks current/selected UI target", "Implemented", "Accessibility", "App focus"),
+            ("Copy / Paste", "Copy that / Paste that", "Uses system clipboard actions", "Implemented", "Accessibility", "Global"),
+            ("Scroll", "Scroll down", "Sends scroll intent", "Implemented", "Accessibility", "Global"),
+            ("Go back", "Go back", "Browser/back navigation intent", "Implemented", "Accessibility", "App focus"),
+            ("Close window", "Close window", "Closes the active window", "Implemented", "Accessibility", "Global")
+        ]
+        let panel = RoundedView(fillColor: PadKeyTheme.panelBackground, radius: 12, strokeColor: NSColor.separatorColor.withAlphaComponent(0.42), strokeWidth: 1)
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.spacing = 0
+        panel.addSubview(stack)
+        stack.fillSuperview()
+        stack.addArrangedSubview(actionRow(["Action", "Examples", "Does", "Status", "Permission", "Scope"], isHeader: true))
+        for action in actions {
+            stack.addArrangedSubview(historySeparator())
+            stack.addArrangedSubview(actionRow([action.0, action.1, action.2, action.3, action.4, action.5], isHeader: false))
+        }
+        return panel
+    }
+
+    private func actionRow(_ values: [String], isHeader: Bool) -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.edgeInsets = NSEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        let widths: [CGFloat] = [96, 148, 164, 86, 96, 70]
+        for (index, value) in values.enumerated() {
+            let label = NSTextField(wrappingLabelWithString: value)
+            label.font = .systemFont(ofSize: isHeader ? 11 : 10, weight: isHeader ? .bold : .medium)
+            label.textColor = isHeader ? PadKeyTheme.ink : PadKeyTheme.secondaryInk
+            label.maximumNumberOfLines = 3
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.widthAnchor.constraint(equalToConstant: widths[min(index, widths.count - 1)]).isActive = true
+            row.addArrangedSubview(label)
+        }
+        return row
+    }
+
+    private func permissionStatusTable() -> NSView {
+        let rows = [
+            ("Microphone", "Needed only when MacBook microphone is selected", "Request in macOS Privacy settings"),
+            ("Bluetooth", "Needed for PadKey BLE hardware input", "Grant when macOS prompts"),
+            ("Accessibility", "Needed for Mac control and text insertion", PermissionHelper.isAccessibilityTrusted ? "Enabled" : "Needs permission"),
+            ("Input Monitoring", "Needed for global fn detection", PermissionHelper.isInputMonitoringTrusted ? "Enabled" : "Needs permission"),
+            ("Speech Recognition", "Only needed for Apple Speech fallback", "Optional"),
+            ("Local Network", "Only needed for Wi‑Fi transport", "Optional until Wi‑Fi is used")
+        ]
+        let panel = settingsCard(title: "Permission checklist", rows: rows.map { ($0.0, "\($0.1) · \($0.2)") }, height: 330)
+        return panel
+    }
+
+    private func captureHistoryTable() -> NSView {
+        let panel = RoundedView(fillColor: PadKeyTheme.panelBackground, radius: 12, strokeColor: NSColor.separatorColor.withAlphaComponent(0.42), strokeWidth: 1)
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        let list = NSStackView()
+        list.orientation = .vertical
+        list.spacing = 0
+        panel.addSubview(list)
+        list.fillSuperview()
+        let records = store.snapshot.history.prefix(8)
+        if records.isEmpty {
+            list.addArrangedSubview(emptyState("No captures yet", detail: "Press fn to create a dictation or command capture."))
+            return panel
+        }
+        for (index, record) in records.enumerated() {
+            list.addArrangedSubview(captureHistoryRow(record))
+            if index < records.count - 1 { list.addArrangedSubview(historySeparator()) }
+        }
+        return panel
+    }
+
+    private func captureHistoryRow(_ record: TranscriptRecord) -> NSView {
+        let row = RoundedView(fillColor: .clear, radius: 0)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 96).isActive = true
+
+        let source = record.inputSource?.displayName ?? "Unknown input"
+        let text = NSTextField(wrappingLabelWithString: record.text)
+        text.font = .systemFont(ofSize: 13, weight: .semibold)
+        text.textColor = PadKeyTheme.ink
+        text.maximumNumberOfLines = 2
+
+        let detail = NSTextField(wrappingLabelWithString: "\(source) · \(record.recognitionEngine ?? "Unknown ASR") · \(record.audioPath == nil ? "No saved audio" : "Audio saved")")
+        detail.font = .systemFont(ofSize: 11, weight: .medium)
+        detail.textColor = PadKeyTheme.secondaryInk
+        detail.maximumNumberOfLines = 2
+
+        let actions = NSStackView()
+        actions.orientation = .horizontal
+        actions.spacing = 6
+        actions.addArrangedSubview(compactActionButton("Copy", identifier: record.id.uuidString, action: #selector(copyHistoryRecord(_:))))
+        actions.addArrangedSubview(compactActionButton("Read", identifier: record.id.uuidString, action: #selector(readHistoryRecord(_:))))
+        actions.addArrangedSubview(compactActionButton("Play", identifier: record.id.uuidString, action: #selector(playHistoryAudio(_:))))
+        actions.addArrangedSubview(compactActionButton("Run", identifier: record.id.uuidString, action: #selector(runHistoryAsCommand(_:))))
+
+        [text, detail, actions].forEach {
+            row.addSubview($0)
+            $0.translatesAutoresizingMaskIntoConstraints = false
+        }
+        NSLayoutConstraint.activate([
+            text.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 18),
+            text.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -18),
+            text.topAnchor.constraint(equalTo: row.topAnchor, constant: 14),
+            detail.leadingAnchor.constraint(equalTo: text.leadingAnchor),
+            detail.trailingAnchor.constraint(equalTo: text.trailingAnchor),
+            detail.topAnchor.constraint(equalTo: text.bottomAnchor, constant: 7),
+            actions.leadingAnchor.constraint(equalTo: text.leadingAnchor),
+            actions.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 10),
+            actions.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -14)
+        ])
+        return row
     }
 
     private func agentCommandComposer() -> NSView {
@@ -1858,7 +2136,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         button.hoverColor = selected ? PadKeyTheme.teal : PadKeyTheme.softSurface.withAlphaComponent(0.72)
         button.contentTintColor = selected ? .white : PadKeyTheme.ink
         button.translatesAutoresizingMaskIntoConstraints = false
-        button.widthAnchor.constraint(equalToConstant: 56).isActive = true
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
         button.heightAnchor.constraint(equalToConstant: 30).isActive = true
         return button
     }
@@ -2660,17 +2938,50 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         DispatchQueue.main.async { [weak self] in self?.render() }
     }
 
+    @objc private func hardwareStreamDidUpdate(_ notification: Notification) {
+        guard let status = notification.userInfo?["status"] as? PadKeyHardwareStreamStatus else { return }
+        hardwareStatus = status
+        guard page == .signalMonitor else { return }
+        DispatchQueue.main.async { [weak self] in self?.render() }
+    }
+
+    @objc private func inputSourceDidChange() {
+        guard page == .signalMonitor || page == .agent || page == .pipeline else { return }
+        DispatchQueue.main.async { [weak self] in self?.render() }
+    }
+
     private func executeAgentCommand(_ transcript: String) {
         let request = MacCommandRequest(
             transcript: transcript,
-            source: "padkey_control_panel",
-            batteryPercent: nil,
+            source: store.selectedInputSource.commandSource,
+            batteryPercent: PadKeyHardwareAudioService.shared.status.batteryPercent,
             mode: "mac_control"
         )
         commandCoordinator.execute(
             request: request,
             preferredApplication: AppDelegate.shared?.preferredMacCommandApplication()
         ) { _ in }
+    }
+
+    @objc private func selectInputSource(_ sender: NSButton) {
+        guard let raw = sender.identifier?.rawValue.replacingOccurrences(of: "input-", with: "") else { return }
+        let source: PadKeyInputSource
+        switch raw {
+        case "padkey_ble_inmp441":
+            source = .padKeyBLE(channel: .inmp441)
+        case "padkey_ble_max4466":
+            source = .padKeyBLE(channel: .max4466)
+        case "padkey_ble_piezo":
+            source = .padKeyBLE(channel: .piezo)
+        case "padkey_usb_inmp441":
+            source = .padKeyUSB(channel: .inmp441)
+        case "system_microphone":
+            source = .systemAudio(deviceID: nil)
+        default:
+            return
+        }
+        store.setSelectedInputSource(source)
+        render()
     }
 
     @objc private func addScratchpadNote() {
@@ -2692,6 +3003,44 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
 
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(record.text, forType: .string)
+    }
+
+    @objc private func readHistoryRecord(_ sender: NSButton) {
+        guard
+            let rawID = sender.identifier?.rawValue,
+            let id = UUID(uuidString: rawID),
+            let record = store.snapshot.history.first(where: { $0.id == id })
+        else {
+            NSSound.beep()
+            return
+        }
+        speechSynthesizer.startSpeaking(record.text)
+    }
+
+    @objc private func playHistoryAudio(_ sender: NSButton) {
+        guard
+            let rawID = sender.identifier?.rawValue,
+            let id = UUID(uuidString: rawID),
+            let record = store.snapshot.history.first(where: { $0.id == id }),
+            let path = record.audioPath
+        else {
+            NSSound.beep()
+            return
+        }
+        capturePlaybackSound = NSSound(contentsOfFile: path, byReference: true)
+        if capturePlaybackSound?.play() != true { NSSound.beep() }
+    }
+
+    @objc private func runHistoryAsCommand(_ sender: NSButton) {
+        guard
+            let rawID = sender.identifier?.rawValue,
+            let id = UUID(uuidString: rawID),
+            let record = store.snapshot.history.first(where: { $0.id == id })
+        else {
+            NSSound.beep()
+            return
+        }
+        executeAgentCommand(record.text)
     }
 
     @objc private func editHistoryRecord(_ sender: NSButton) {

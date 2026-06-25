@@ -50,6 +50,34 @@ struct VoiceMeterFrame {
         return VoiceMeterFrame(level: compressedLevel(rootMeanSquare: rms), bands: bands)
     }
 
+    static func from(int16Samples samples: [Int16], bandCount: Int = Self.bandCount) -> VoiceMeterFrame {
+        guard bandCount > 0, !samples.isEmpty else { return .idle }
+
+        let framesPerBand = max(1, samples.count / bandCount)
+        var bands = Array(repeating: 0.0, count: bandCount)
+        var totalSquares = 0.0
+        var totalSamples = 0
+
+        for band in 0..<bandCount {
+            let start = band * framesPerBand
+            let end = band == bandCount - 1 ? samples.count : min(samples.count, start + framesPerBand)
+            guard start < end else { continue }
+
+            var squares = 0.0
+            for index in start..<end {
+                let sample = Double(samples[index]) / 32768.0
+                squares += sample * sample
+            }
+            let count = end - start
+            totalSquares += squares
+            totalSamples += count
+            bands[band] = compressedLevel(rootMeanSquare: sqrt(squares / Double(count)))
+        }
+
+        let rms = totalSamples > 0 ? sqrt(totalSquares / Double(totalSamples)) : 0
+        return VoiceMeterFrame(level: compressedLevel(rootMeanSquare: rms), bands: bands)
+    }
+
     private static func compressedLevel(rootMeanSquare rms: Double) -> Double {
         let noiseFloor = 0.006
         let normalized = max(0, rms - noiseFloor) * 9.5

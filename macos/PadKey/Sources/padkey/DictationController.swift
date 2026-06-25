@@ -38,6 +38,7 @@ final class DictationController {
     private let whisperTranscriber = WhisperTranscriber()
     private let megaTranscriber = MegaASRTranscriber()
     private let appleSpeech = AppleSpeechDictationController()
+    private var activeRecorder: DictationAudioRecorder?
 
     private var activeBackend: ActiveBackend?
     private var partialHandler: ((String) -> Void)?
@@ -48,6 +49,7 @@ final class DictationController {
     var prefersLocalWhisper = true
     var recognitionEngine: RecognitionEngine = .autoRobust
     var robustRetryEnabled = true
+    var inputSource: PadKeyInputSource = PadKeyStore.shared.selectedInputSource
 
     var liveTranscriptionStatus: String {
         sherpaLive.statusMessage
@@ -81,6 +83,24 @@ final class DictationController {
     ) {
         let sessionID = UUID()
         recordingSessionID = sessionID
+
+        if inputSource.isPadKeyHardware {
+            guard whisperTranscriber.isReady || megaTranscriber.isReady else {
+                onError(DictationError.recognizerUnavailable)
+                return
+            }
+            let hardwareBackend: ActiveBackend = recognitionEngine == .megaASR || !whisperTranscriber.isReady ? .megaASR : .localWhisper
+            startLocalWhisper(
+                backend: hardwareBackend,
+                useSherpaLive: false,
+                sessionID: sessionID,
+                onPartial: onPartial,
+                onMeter: onMeter,
+                onComplete: onComplete,
+                onError: onError
+            )
+            return
+        }
 
         switch recognitionEngine {
         case .autoRobust:
@@ -195,7 +215,9 @@ final class DictationController {
                     engine: .appleSpeech,
                     usedRobustRetry: false,
                     fallbackReason: nil,
-                    asrDuration: nil
+                    asrDuration: nil,
+                    inputSource: self.inputSource,
+                    audioURL: nil
                 ))
             },
             onError: { [weak self] error in
@@ -231,6 +253,8 @@ final class DictationController {
         sherpaLive.cancel()
         whisperRecorder.cancel()
         whisperRecorder.onMeter = nil
+        activeRecorder?.cancel()
+        activeRecorder = nil
         appleSpeech.cancel()
         clearHandlers()
         activeBackend = nil
@@ -250,7 +274,8 @@ final class DictationController {
         errorHandler = onError
         activeBackend = backend
 
-        PermissionHelper.requestMicrophone { [weak self] allowed in
+        let selectedSource = inputSource
+        let beginRecording: (Bool) -> Void = { [weak self] allowed in
             DispatchQueue.main.async {
                 guard let self else { return }
                 guard self.recordingSessionID == sessionID, self.activeBackend == backend else { return }
@@ -263,12 +288,18 @@ final class DictationController {
                     if useSherpaLive {
                         self.startSherpaLive(sessionID: sessionID, onPartial: onPartial)
                     }
-                    self.whisperRecorder.onMeter = { [weak self] frame in
+                    let recorder: DictationAudioRecorder = selectedSource.isPadKeyHardware
+                        ? PadKeyHardwareAudioRecorder(source: selectedSource)
+                        : self.whisperRecorder
+                    self.activeRecorder = recorder
+                    recorder.onMeter = { [weak self] frame in
                         guard self?.recordingSessionID == sessionID else { return }
                         onMeter(frame)
                     }
-                    try self.whisperRecorder.start()
-                    onPartial(useSherpaLive
+                    try recorder.start()
+                    onPartial(selectedSource.isPadKeyHardware
+                        ? "Listening from \(selectedSource.displayName). Release fn to transcribe this PadKey hardware capture."
+                        : useSherpaLive
                         ? "Listening locally. Sherpa is showing live words; Whisper will finalize when you release fn."
                         : "Recording locally. Press Option-Space again to transcribe with Whisper."
                     )
@@ -279,6 +310,12 @@ final class DictationController {
                     self.failLocalWhisper(error)
                 }
             }
+        }
+
+        if selectedSource.isPadKeyHardware {
+            beginRecording(true)
+        } else {
+            PermissionHelper.requestMicrophone(completion: beginRecording)
         }
     }
 
@@ -341,9 +378,10 @@ final class DictationController {
     private func stopLocalWhisper() {
         let liveTranscript = sherpaLive.stop()
 
-        guard whisperRecorder.recordingActive else {
+        guard let recorder = activeRecorder, recorder.recordingActive else {
             recordingSessionID = UUID()
-            whisperRecorder.onMeter = nil
+            activeRecorder?.onMeter = nil
+            activeRecorder = nil
             let completion = completionHandler
             clearHandlers()
             activeBackend = nil
@@ -352,28 +390,30 @@ final class DictationController {
                 engine: .sherpaWhisper,
                 usedRobustRetry: false,
                 fallbackReason: "Whisper recorder was not active; used live transcript.",
-                asrDuration: nil
+                asrDuration: nil,
+                inputSource: inputSource,
+                audioURL: nil
             ))
             return
         }
 
         do {
-            let audioURL = try whisperRecorder.stop()
-            whisperRecorder.onMeter = nil
+            let audioURL = try recorder.stop()
+            recorder.onMeter = nil
+            activeRecorder = nil
             let backend = activeBackend ?? .localWhisper
             let engine = engine(for: backend)
             partialHandler?(backend == .megaASR ? "Transcribing robustly with Mega-ASR..." : "Transcribing offline with local Whisper...")
             let sessionID = recordingSessionID
             let asrStartedAt = Date()
+            let source = inputSource
 
             transcribe(audioURL: audioURL, backend: backend, liveTranscript: liveTranscript) { [weak self] result in
                 DispatchQueue.main.async {
                     guard let self else { return }
                     guard self.recordingSessionID == sessionID else {
-                        try? FileManager.default.removeItem(at: audioURL)
                         return
                     }
-                    try? FileManager.default.removeItem(at: audioURL)
 
                     switch result {
                     case .success(let dictationResult):
@@ -383,6 +423,8 @@ final class DictationController {
                         self.activeBackend = nil
                         var enriched = dictationResult
                         enriched.asrDuration = Date().timeIntervalSince(asrStartedAt)
+                        enriched.inputSource = source
+                        enriched.audioURL = audioURL
                         completion?(enriched)
                     case .failure(let error):
                         if !liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -395,7 +437,9 @@ final class DictationController {
                                 engine: engine,
                                 usedRobustRetry: false,
                                 fallbackReason: error.localizedDescription,
-                                asrDuration: Date().timeIntervalSince(asrStartedAt)
+                                asrDuration: Date().timeIntervalSince(asrStartedAt),
+                                inputSource: source,
+                                audioURL: audioURL
                             ))
                             return
                         }
@@ -537,6 +581,8 @@ final class DictationController {
         sherpaLive.cancel()
         whisperRecorder.cancel()
         whisperRecorder.onMeter = nil
+        activeRecorder?.cancel()
+        activeRecorder = nil
         let handler = errorHandler
         clearHandlers()
         activeBackend = nil
