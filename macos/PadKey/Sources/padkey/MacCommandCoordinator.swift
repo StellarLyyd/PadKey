@@ -18,6 +18,11 @@ enum ParsedMacCommand: Equatable {
     case browserSearch(String)
     case summarizePage
     case genericUI(GenericUIAction)
+    case copy
+    case paste
+    case scroll(direction: String)
+    case goBack
+    case closeWindow
     case confirm
     case unknown
 }
@@ -30,6 +35,7 @@ enum MacCommandParser {
     static func looksLikeVoiceCommand(_ transcript: String) -> Bool {
         hasWakePhrase(transcript)
             || normalized(transcript).range(of: #"^(confirm|cancel)$"#, options: .regularExpression) != nil
+            || parse(transcript) != .unknown
     }
 
     static func parse(_ transcript: String) -> ParsedMacCommand {
@@ -43,13 +49,13 @@ enum MacCommandParser {
         if let value = capture(command, #"^(?:add|append)\s+to\s+(?:this|the current)\s+note\s+(.+)$"#) {
             return .appendNote(value)
         }
-        if command.range(of: #"^(?:open|start)\s+facetime$"#, options: [.regularExpression, .caseInsensitive]) != nil {
+        if command.range(of: #"^(?:open|start)\s+(?:the\s+)?(?:app\s+)?facetime$"#, options: [.regularExpression, .caseInsensitive]) != nil {
             return .openFaceTime
         }
         if let value = capture(command, #"^(?:call|facetime)\s+(.+?)(?:\s+on\s+facetime)?$"#) {
             return .faceTimeContact(value)
         }
-        if let value = capture(command, #"^open\s+(.+)$"#) {
+        if let value = capture(command, #"^open\s+(?:the\s+)?(?:app\s+)?(.+)$"#) {
             return .openApplication(value)
         }
         if let value = capture(command, #"^(?:search\s+(?:the\s+)?web\s+for|search\s+for)\s+(.+)$"#) {
@@ -57,6 +63,21 @@ enum MacCommandParser {
         }
         if command.range(of: #"^summarize\s+(?:this\s+)?page$"#, options: [.regularExpression, .caseInsensitive]) != nil {
             return .summarizePage
+        }
+        if command.range(of: #"^(?:copy|copy that|copy this)$"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return .copy
+        }
+        if command.range(of: #"^(?:paste|paste that|paste this)$"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return .paste
+        }
+        if let value = capture(command, #"^scroll\s+(up|down|left|right)$"#) {
+            return .scroll(direction: value.lowercased())
+        }
+        if command.range(of: #"^(?:go\s+back|back)$"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return .goBack
+        }
+        if command.range(of: #"^(?:close\s+(?:the\s+)?window|close\s+window)$"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return .closeWindow
         }
         if let captures = captures(command, #"^(?:fill|input)\s+(?:the\s+)?(.+?)\s+with\s+(.+)$"#, count: 2) {
             return .genericUI(.fill(target: captures[0], value: captures[1]))
@@ -340,6 +361,21 @@ final class MacCommandCoordinator {
         case .genericUI(let action):
             executeGeneric(action, command: transcript, application: preferredApplication, completion: completion)
 
+        case .copy:
+            executeKeyboardShortcut(intent: "copy", spoken: "Copied.", key: "c", command: transcript, application: preferredApplication, completion: completion)
+
+        case .paste:
+            executeKeyboardShortcut(intent: "paste", spoken: "Pasted.", key: "v", command: transcript, application: preferredApplication, completion: completion)
+
+        case .scroll(let direction):
+            executeScroll(direction: direction, command: transcript, application: preferredApplication, completion: completion)
+
+        case .goBack:
+            executeKeyboardShortcut(intent: "go_back", spoken: "Going back.", key: "[", command: transcript, application: preferredApplication, completion: completion)
+
+        case .closeWindow:
+            executeKeyboardShortcut(intent: "close_window", spoken: "Closing the window.", key: "w", command: transcript, application: preferredApplication, completion: completion)
+
         case .unknown:
             finish(.failure(
                 spoken: "I did not recognize that Mac command. Try make a note, open FaceTime, fill a field, or click a button.",
@@ -489,6 +525,50 @@ final class MacCommandCoordinator {
             finish(performGeneric(action, node: node, app: app), command: command, completion: completion)
         } catch {
             finish(toolFailure(intent: "ui_action", error: error, app: application?.localizedName), command: command, completion: completion)
+        }
+    }
+
+    private func executeKeyboardShortcut(
+        intent: String,
+        spoken: String,
+        key: String,
+        command: String,
+        application: NSRunningApplication?,
+        completion: @escaping (MacCommandResponse) -> Void
+    ) {
+        do {
+            try UIAutomation.pressCommandKey(key)
+            finish(success(
+                intent: intent,
+                spoken: spoken,
+                actions: [MacCommandActionRecord(type: "keyboard_shortcut", appName: application?.localizedName, nodeId: nil, target: "Command-\(key)", text: nil)],
+                frontmostApp: application?.localizedName,
+                target: "Command-\(key)",
+                result: spoken
+            ), command: command, completion: completion)
+        } catch {
+            finish(toolFailure(intent: intent, error: error, app: application?.localizedName), command: command, completion: completion)
+        }
+    }
+
+    private func executeScroll(
+        direction: String,
+        command: String,
+        application: NSRunningApplication?,
+        completion: @escaping (MacCommandResponse) -> Void
+    ) {
+        do {
+            try UIAutomation.scroll(direction: direction)
+            finish(success(
+                intent: "scroll",
+                spoken: "Scrolling \(direction).",
+                actions: [MacCommandActionRecord(type: "scroll", appName: application?.localizedName, nodeId: nil, target: direction, text: nil)],
+                frontmostApp: application?.localizedName,
+                target: direction,
+                result: "Scrolled \(direction)"
+            ), command: command, completion: completion)
+        } catch {
+            finish(toolFailure(intent: "scroll", error: error, app: application?.localizedName), command: command, completion: completion)
         }
     }
 

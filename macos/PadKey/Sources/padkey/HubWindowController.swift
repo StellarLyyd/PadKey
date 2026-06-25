@@ -14,7 +14,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         case agent = "Agent Control"
         case signalMonitor = "Signal Monitor"
         case advanced = "Advanced"
-        case help = "Help / How PadKey Works"
+        case help = "Help"
         case insights = "Insights"
         case sync = "Voice Setup"
         case dictionary = "Dictionary"
@@ -79,6 +79,8 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
     private weak var syncMeterView: SyncMeterView?
     private weak var agentCommandField: NSTextField?
     private var hardwareStatus = PadKeyHardwareAudioService.shared.status
+    private var lastSignalMonitorRenderAt = Date.distantPast
+    private var signalMonitorRenderScheduled = false
     private let speechSynthesizer = NSSpeechSynthesizer()
     private var capturePlaybackSound: NSSound?
     private var didCenterOnFirstShow = false
@@ -374,7 +376,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
             if page == .advanced {
                 studioController.openAdvanced("signals")
             } else {
-                studioController.loadStudioIfNeeded()
+                studioController.openStudio()
             }
             return
         }
@@ -2942,6 +2944,19 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         guard let status = notification.userInfo?["status"] as? PadKeyHardwareStreamStatus else { return }
         hardwareStatus = status
         guard page == .signalMonitor else { return }
+        let elapsed = Date().timeIntervalSince(lastSignalMonitorRenderAt)
+        guard elapsed >= 0.25 else {
+            guard !signalMonitorRenderScheduled else { return }
+            signalMonitorRenderScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + (0.25 - elapsed)) { [weak self] in
+                guard let self, self.page == .signalMonitor else { return }
+                self.signalMonitorRenderScheduled = false
+                self.lastSignalMonitorRenderAt = Date()
+                self.render()
+            }
+            return
+        }
+        lastSignalMonitorRenderAt = Date()
         DispatchQueue.main.async { [weak self] in self?.render() }
     }
 

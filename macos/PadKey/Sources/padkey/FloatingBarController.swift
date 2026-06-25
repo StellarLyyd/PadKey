@@ -389,6 +389,8 @@ final class CircularVoiceMeterView: NSView {
     private var smoothedBands = Array(repeating: CGFloat(0), count: VoiceMeterFrame.bandCount)
     private var smoothedLevel: CGFloat = 0
     private var lastMeterUpdate = Date.distantPast
+    private let idleAccent = NSColor(calibratedRed: 0.54, green: 0.61, blue: 0.69, alpha: 1)
+    private let activeAccent = NSColor(calibratedRed: 0.48, green: 0.62, blue: 0.72, alpha: 1)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -497,7 +499,7 @@ final class CircularVoiceMeterView: NSView {
         )).fill()
         NSGraphicsContext.current?.restoreGraphicsState()
 
-        NSColor.white.withAlphaComponent(0.10).setStroke()
+        idleAccent.withAlphaComponent(0.20).setStroke()
         let innerStroke = NSBezierPath(ovalIn: NSRect(
             x: center.x - innerRadius,
             y: center.y - innerRadius,
@@ -525,9 +527,9 @@ final class CircularVoiceMeterView: NSView {
             let dot = NSBezierPath(ovalIn: NSRect(x: x, y: y, width: dotSize, height: dotSize))
 
             if isActive {
-                PadKeyTheme.mint.withAlphaComponent(0.42 + voice * 0.52).setFill()
+                activeAccent.withAlphaComponent(0.34 + voice * 0.50).setFill()
             } else {
-                NSColor.white.withAlphaComponent(0.46).setFill()
+                idleAccent.withAlphaComponent(0.44).setFill()
             }
             dot.fill()
         }
@@ -545,7 +547,7 @@ final class CircularVoiceMeterView: NSView {
                 let progress = CGFloat(index) / CGFloat(max(1, barCount - 1))
                 let voice = max(liveValue(at: progress), smoothedLevel * 0.32)
                 let height = 8 + voice * 28
-                PadKeyTheme.mint.withAlphaComponent(0.62 + voice * 0.34).setFill()
+                activeAccent.withAlphaComponent(0.58 + voice * 0.30).setFill()
                 let rect = NSRect(
                     x: startX + CGFloat(index) * (barWidth + gap),
                     y: center.y - height / 2,
@@ -558,7 +560,7 @@ final class CircularVoiceMeterView: NSView {
             let text = "fn" as NSString
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 18, weight: .bold),
-                .foregroundColor: NSColor.white.withAlphaComponent(0.82)
+                .foregroundColor: idleAccent.withAlphaComponent(0.92)
             ]
             let size = text.size(withAttributes: attributes)
             text.draw(

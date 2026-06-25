@@ -60,6 +60,25 @@ enum UIAutomation {
         """)
     }
 
+    static func scroll(direction: String) throws {
+        let keyCode: Int
+        switch direction.lowercased() {
+        case "up":
+            keyCode = 116 // page up
+        case "left":
+            keyCode = 123 // left arrow
+        case "right":
+            keyCode = 124 // right arrow
+        default:
+            keyCode = 121 // page down
+        }
+        _ = try runAppleScript("""
+        tell application "System Events"
+            key code \(keyCode)
+        end tell
+        """)
+    }
+
     static func openURL(_ url: URL) throws {
         guard NSWorkspace.shared.open(url) else { throw UIAutomationError.invalidURL }
     }

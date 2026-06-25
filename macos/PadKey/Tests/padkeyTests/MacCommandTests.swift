@@ -29,7 +29,21 @@ final class MacCommandTests: XCTestCase {
     func testOrdinaryDictationIsNotIntercepted() {
         XCTAssertFalse(MacCommandParser.looksLikeVoiceCommand("This is an ordinary paragraph for my document."))
         XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Hey PadKey, open Notes"))
+        XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Open Safari"))
+        XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Open app Safari"))
+        XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Scroll down"))
+        XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Paste that"))
         XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Confirm"))
+    }
+
+    func testHoldToTalkDirectCommandParsing() {
+        XCTAssertEqual(MacCommandParser.parse("Open app Safari"), .openApplication("Safari"))
+        XCTAssertEqual(MacCommandParser.parse("Open the app FaceTime"), .openFaceTime)
+        XCTAssertEqual(MacCommandParser.parse("Copy that"), .copy)
+        XCTAssertEqual(MacCommandParser.parse("Paste that"), .paste)
+        XCTAssertEqual(MacCommandParser.parse("Scroll down"), .scroll(direction: "down"))
+        XCTAssertEqual(MacCommandParser.parse("Go back"), .goBack)
+        XCTAssertEqual(MacCommandParser.parse("Close window"), .closeWindow)
     }
 
     func testSafetyPolicyRequiresConfirmationForConsequentialActions() {
