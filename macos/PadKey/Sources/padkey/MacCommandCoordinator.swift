@@ -10,6 +10,7 @@ enum GenericUIAction: Equatable {
 }
 
 enum ParsedMacCommand: Equatable {
+    case newNote
     case makeNote(String)
     case appendNote(String)
     case openFaceTime
@@ -18,6 +19,9 @@ enum ParsedMacCommand: Equatable {
     case browserSearch(String)
     case summarizePage
     case genericUI(GenericUIAction)
+    case computerControl(String)
+    case conversation(String)
+    case diagram(String)
     case copy
     case paste
     case scroll(direction: String)
@@ -43,7 +47,10 @@ enum MacCommandParser {
         if command.range(of: #"^(confirm|yes confirm|do it)$"#, options: [.regularExpression, .caseInsensitive]) != nil {
             return .confirm
         }
-        if let value = capture(command, #"^(?:make\s+a\s+note|create\s+(?:a\s+)?note|note)\s+(.+)$"#) {
+        if command.range(of: #"^(?:(?:make|create|start|open)\s+(?:a\s+)?new\s+note|new\s+note|blank\s+note)$"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return .newNote
+        }
+        if let value = capture(command, #"^(?:make\s+(?:a\s+)?note|create\s+(?:a\s+)?note|note)\s+(.+)$"#) {
             return .makeNote(value)
         }
         if let value = capture(command, #"^(?:add|append)\s+to\s+(?:this|the current)\s+note\s+(.+)$"#) {
@@ -55,14 +62,23 @@ enum MacCommandParser {
         if let value = capture(command, #"^(?:call|facetime)\s+(.+?)(?:\s+on\s+facetime)?$"#) {
             return .faceTimeContact(value)
         }
-        if let value = capture(command, #"^open\s+(?:the\s+)?(?:app\s+)?(.+)$"#) {
+        if let value = capture(command, #"^(?:open|launch|start|switch\s+to|focus|bring\s+up)\s+(?:the\s+)?(?:app\s+)?(.+)$"#) {
             return .openApplication(value)
         }
-        if let value = capture(command, #"^(?:search\s+(?:the\s+)?web\s+for|search\s+for)\s+(.+)$"#) {
+        if let value = capture(command, #"^(?:search\s+(?:the\s+)?web\s+for|search\s+for|google|look\s+up)\s+(.+)$"#) {
             return .browserSearch(value)
         }
         if command.range(of: #"^summarize\s+(?:this\s+)?page$"#, options: [.regularExpression, .caseInsensitive]) != nil {
             return .summarizePage
+        }
+        if let value = capture(command, #"^(?:create|make|draw|generate)\s+(?:a\s+)?(?:diagram|flowchart|map)(?:\s+(?:of|for|about|showing))?\s+(.+)$"#) {
+            return .diagram(value)
+        }
+        if let value = capture(command, #"^(?:diagram|flowchart)\s+(.+)$"#) {
+            return .diagram(value)
+        }
+        if let value = conversationalPrompt(from: command) {
+            return .conversation(value)
         }
         if command.range(of: #"^(?:copy|copy that|copy this)$"#, options: [.regularExpression, .caseInsensitive]) != nil {
             return .copy
@@ -98,6 +114,12 @@ enum MacCommandParser {
         if let captures = captures(command, #"^select\s+(.+?)(?:\s+from\s+(?:the\s+)?(.+))?$"#, count: 2) {
             return .genericUI(.select(option: captures[0], target: captures[1].isEmpty ? nil : captures[1]))
         }
+        if hasWakePhrase(transcript), !command.isEmpty {
+            return .conversation(command)
+        }
+        if looksLikeComputerControlRuntime(command, originalTranscript: transcript) {
+            return .computerControl(command)
+        }
         return .unknown
     }
 
@@ -129,8 +151,46 @@ enum MacCommandParser {
         }
     }
 
+    private static func conversationalPrompt(from command: String) -> String? {
+        let patterns = [
+            #"^(?:ask\s+padkey|chat\s+with\s+padkey|talk\s+to\s+padkey)\s+(.+)$"#,
+            #"^(?:talk\s+to\s+me\s+about|chat\s+(?:with\s+me\s+)?about|answer\s+this|explain|tell\s+me\s+about|help\s+me\s+understand)\s+(.+)$"#,
+            #"^(?:can\s+you|could\s+you)\s+(?:explain|tell\s+me|help\s+me|talk\s+to\s+me\s+about)\s+(.+)$"#,
+            #"^(?:what\s+do\s+you\s+think(?:\s+about)?|what\s+would\s+you\s+do\s+about)\s+(.+)$"#
+        ]
+        for pattern in patterns {
+            if let value = capture(command, pattern), !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
     private static func normalized(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func looksLikeComputerControlRuntime(_ command: String, originalTranscript: String) -> Bool {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if hasWakePhrase(originalTranscript) {
+            return true
+        }
+
+        let lower = trimmed.lowercased()
+        let liveStateMarkers = [
+            "current app", "frontmost app", "whatever app is open", "this app",
+            "on screen", "the screen", "visible", "window", "tab", "menu",
+            "button", "field", "option", "control", "sidebar", "drawer",
+            "canvas", "toolbar", "panel", "list", "row", "project", "chat"
+        ]
+        let actionMarkers = [
+            "find", "choose", "pick", "select", "click", "press", "focus",
+            "fill", "type", "open", "navigate", "go to", "look at", "use",
+            "show", "new", "create", "start", "search", "switch"
+        ]
+        return liveStateMarkers.contains { lower.contains($0) }
+            && actionMarkers.contains { lower.contains($0) }
     }
 }
 
@@ -156,6 +216,7 @@ final class MacCommandCoordinator {
 
     private let accessibility = AccessibilityTreeService.shared
     private let planner = AppActionPlanner()
+    private let localModel = LocalModelClient()
     private let speech = NSSpeechSynthesizer()
     private var pendingConfirmations: [String: PendingConfirmation] = [:]
     private(set) var snapshot = AgentControlSnapshot.idle
@@ -224,6 +285,21 @@ final class MacCommandCoordinator {
             pendingConfirmations.removeValue(forKey: pending.id)
             pending.execute { [weak self] response in
                 self?.finish(response, command: transcript, completion: completion)
+            }
+
+        case .newNote:
+            do {
+                try NotesTool.newNote()
+                finish(success(
+                    intent: "new_note",
+                    spoken: "New note created.",
+                    actions: [MacCommandActionRecord(type: "new_note", appName: "Notes", nodeId: nil, target: "Blank note", text: nil)],
+                    frontmostApp: "Notes",
+                    target: "Blank note",
+                    result: "Created a blank note in Apple Notes"
+                ), command: transcript, completion: completion)
+            } catch {
+                finish(toolFailure(intent: "new_note", error: error, app: "Notes"), command: transcript, completion: completion)
             }
 
         case .makeNote(let content):
@@ -327,14 +403,21 @@ final class MacCommandCoordinator {
 
         case .openApplication(let appName):
             do {
-                try UIAutomation.openApplication(named: appName)
+                let app = try UIAutomation.resolveApplication(named: appName)
+                try UIAutomation.openApplication(named: app.displayName)
                 finish(success(
                     intent: "open_app",
-                    spoken: "Opening \(appName).",
-                    actions: [MacCommandActionRecord(type: "open_app", appName: appName, nodeId: nil, target: nil, text: nil)],
-                    frontmostApp: appName,
+                    spoken: "Opening \(app.displayName).",
+                    actions: [MacCommandActionRecord(type: "open_app", appName: app.displayName, nodeId: nil, target: nil, text: nil)],
+                    frontmostApp: app.displayName,
                     target: nil,
-                    result: "\(appName) opened"
+                    result: "\(app.displayName) opened"
+                ), command: transcript, completion: completion)
+            } catch UIAutomationError.ambiguousApp(_, let options) {
+                finish(clarification(
+                    spoken: "I found more than one matching app. Which one did you mean?",
+                    app: nil,
+                    options: options
                 ), command: transcript, completion: completion)
             } catch {
                 finish(toolFailure(intent: "open_app", error: error, app: appName), command: transcript, completion: completion)
@@ -361,6 +444,15 @@ final class MacCommandCoordinator {
         case .genericUI(let action):
             executeGeneric(action, command: transcript, application: preferredApplication, completion: completion)
 
+        case .computerControl(let instruction):
+            executeComputerControl(instruction, command: transcript, application: preferredApplication, completion: completion)
+
+        case .conversation(let prompt):
+            executeLocalConversation(prompt, command: transcript, application: preferredApplication, completion: completion)
+
+        case .diagram(let topic):
+            createDiagramNote(topic, command: transcript, application: preferredApplication, completion: completion)
+
         case .copy:
             executeKeyboardShortcut(intent: "copy", spoken: "Copied.", key: "c", command: transcript, application: preferredApplication, completion: completion)
 
@@ -378,7 +470,8 @@ final class MacCommandCoordinator {
 
         case .unknown:
             finish(.failure(
-                spoken: "I did not recognize that Mac command. Try make a note, open FaceTime, fill a field, or click a button.",
+                intent: "command_misunderstood",
+                spoken: "I heard that as a command, but I need a clearer action or target.",
                 frontmostApp: preferredApplication?.localizedName
             ), command: transcript, completion: completion)
         }
@@ -528,6 +621,58 @@ final class MacCommandCoordinator {
         }
     }
 
+    private func executeComputerControl(
+        _ instruction: String,
+        command: String,
+        application: NSRunningApplication?,
+        completion: @escaping (MacCommandResponse) -> Void
+    ) {
+        guard PermissionHelper.isAccessibilityTrusted else {
+            PermissionHelper.promptAccessibilityIfNeeded()
+            finish(accessibilityFailure(intent: "computer_control_runtime", app: application?.localizedName), command: command, completion: completion)
+            return
+        }
+
+        do {
+            let app = try accessibility.frontmostApp(preferred: application)
+            let nodes = try accessibility.getAccessibilityTree(for: application, maximumNodes: 500)
+            guard !nodes.isEmpty else {
+                finish(.failure(
+                    intent: "computer_control_runtime",
+                    spoken: "I could not find controllable UI elements in \(app.name).",
+                    frontmostApp: app.name,
+                    message: "No accessible controls were available for the current app."
+                ), command: command, completion: completion)
+                return
+            }
+
+            snapshot.status = "Planning"
+            snapshot.frontmostApp = app.name
+            snapshot.detectedIntent = "computer_control_runtime"
+            snapshot.actionResult = "Inspecting \(nodes.count) controls in \(app.name)"
+            publishSnapshot()
+
+            planner.plan(transcript: instruction, frontmostApp: app, nodes: nodes) { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    switch result {
+                    case .failure(let error):
+                        self.finish(.failure(
+                            intent: "computer_control_runtime",
+                            spoken: error.localizedDescription,
+                            frontmostApp: app.name,
+                            message: "The live app was inspected, but no executable local plan was produced."
+                        ), command: command, completion: completion)
+                    case .success(let plan):
+                        self.executePlan(plan, nodes: nodes, app: app, command: command, completion: completion)
+                    }
+                }
+            }
+        } catch {
+            finish(toolFailure(intent: "computer_control_runtime", error: error, app: application?.localizedName), command: command, completion: completion)
+        }
+    }
+
     private func executeKeyboardShortcut(
         intent: String,
         spoken: String,
@@ -620,7 +765,8 @@ final class MacCommandCoordinator {
         nodes: [AccessibilityNode],
         app: FrontmostAppInfo,
         command: String,
-        completion: @escaping (MacCommandResponse) -> Void
+        completion: @escaping (MacCommandResponse) -> Void,
+        confirmed: Bool = false
     ) {
         if plan.type == "clarification" {
             let response = MacCommandResponse(
@@ -642,6 +788,39 @@ final class MacCommandCoordinator {
             return
         }
 
+        if !confirmed, MacActionSafetyPolicy.requiresConfirmation(command: command, target: plannedTargetSummary(plan, nodes: nodes)) {
+            let confirmation = makeConfirmation { [weak self] confirmedResponse in
+                guard let self else { return }
+                confirmedResponse(self.performPlanActions(plan, nodes: nodes, app: app, command: command))
+            }
+            let response = MacCommandResponse(
+                ok: true,
+                intent: "computer_control_confirmation",
+                spoken: "I’m ready to act in \(app.name). Confirm before I continue.",
+                actions: [],
+                frontmostApp: app.name,
+                selectedTarget: plannedTargetSummary(plan, nodes: nodes),
+                actionResult: "Action paused for confirmation",
+                clarification: nil,
+                options: nil,
+                confirmationRequired: true,
+                confirmationId: confirmation.id,
+                permissionRequired: nil,
+                message: nil
+            )
+            finish(response, command: command, completion: completion)
+            return
+        }
+
+        finish(performPlanActions(plan, nodes: nodes, app: app, command: command), command: command, completion: completion)
+    }
+
+    private func performPlanActions(
+        _ plan: AppActionPlan,
+        nodes: [AccessibilityNode],
+        app: FrontmostAppInfo,
+        command: String
+    ) -> MacCommandResponse {
         var records: [MacCommandActionRecord] = []
         do {
             for action in plan.actions {
@@ -655,9 +834,6 @@ final class MacCommandCoordinator {
                     try accessibility.focusElement(nodeId: nodeId)
                     records.append(MacCommandActionRecord(type: "focus", appName: app.name, nodeId: nodeId, target: node.displayName, text: nil))
                 case "click_element":
-                    if MacActionSafetyPolicy.requiresConfirmation(command: command, target: node.displayName) {
-                        throw UIAutomationError.unsupported("That action requires confirmation. Please name the button directly and try again.")
-                    }
                     try accessibility.clickElement(nodeId: nodeId)
                     records.append(MacCommandActionRecord(type: "click", appName: app.name, nodeId: nodeId, target: node.displayName, text: nil))
                 case "set_element_value":
@@ -672,17 +848,28 @@ final class MacCommandCoordinator {
                     throw AppActionPlannerError.invalidPlan("The local model requested an unsupported action.")
                 }
             }
-            finish(success(
+            return success(
                 intent: "ui_action",
                 spoken: plan.spoken,
                 actions: records,
                 frontmostApp: app.name,
                 target: records.last?.target,
                 result: "Completed \(records.count) accessibility action\(records.count == 1 ? "" : "s")"
-            ), command: command, completion: completion)
+            )
         } catch {
-            finish(toolFailure(intent: "ui_action", error: error, app: app.name), command: command, completion: completion)
+            return toolFailure(intent: "ui_action", error: error, app: app.name)
         }
+    }
+
+    private func plannedTargetSummary(_ plan: AppActionPlan, nodes: [AccessibilityNode]) -> String? {
+        let targets = plan.actions.compactMap { action -> String? in
+            guard let nodeId = action.args.nodeId,
+                  let node = nodes.first(where: { $0.id == nodeId })
+            else { return nil }
+            return node.displayName
+        }
+        guard !targets.isEmpty else { return nil }
+        return Array(targets.prefix(3)).joined(separator: ", ")
     }
 
     private func summarizePage(
@@ -723,6 +910,136 @@ final class MacCommandCoordinator {
         } catch {
             finish(toolFailure(intent: "summarize_page", error: error, app: application?.localizedName), command: command, completion: completion)
         }
+    }
+
+    private func executeLocalConversation(
+        _ prompt: String,
+        command: String,
+        application: NSRunningApplication?,
+        completion: @escaping (MacCommandResponse) -> Void
+    ) {
+        let cleanedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedPrompt.isEmpty else {
+            finish(.failure(intent: "local_conversation", spoken: "Tell me what you want to talk about.", frontmostApp: application?.localizedName), command: command, completion: completion)
+            return
+        }
+
+        snapshot.status = "Thinking"
+        snapshot.frontmostApp = application?.localizedName ?? "PadKey"
+        snapshot.detectedIntent = "local_conversation"
+        snapshot.actionResult = "Asking the local Ollama model"
+        publishSnapshot()
+
+        let system = """
+        You are PadKey, a local-first macOS voice assistant running on the user's computer.
+        Be warm, direct, and useful. Keep answers concise enough to speak aloud.
+        If the user asks for a computer action, suggest the exact PadKey command they can say.
+        Preserve names, product terms, unusual spellings, and the user's wording when discussing their notes.
+        Do not claim to use cloud services or remote APIs.
+        """
+
+        localModel.chat(system: system, user: cleanedPrompt, requireJSON: false, temperature: 0.45) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let answer):
+                    let cleanedAnswer = Self.cleanModelText(answer, maxCharacters: 1_200)
+                    self.finish(self.success(
+                        intent: "local_conversation",
+                        spoken: cleanedAnswer,
+                        actions: [MacCommandActionRecord(type: "local_conversation", appName: "PadKey", nodeId: nil, target: "Ollama", text: cleanedPrompt)],
+                        frontmostApp: application?.localizedName ?? "PadKey",
+                        target: "Local Ollama model",
+                        result: "Answered locally"
+                    ), command: command, completion: completion)
+                case .failure(let error):
+                    self.finish(self.toolFailure(intent: "local_conversation", error: error, app: application?.localizedName ?? "PadKey"), command: command, completion: completion)
+                }
+            }
+        }
+    }
+
+    private func createDiagramNote(
+        _ topic: String,
+        command: String,
+        application: NSRunningApplication?,
+        completion: @escaping (MacCommandResponse) -> Void
+    ) {
+        let cleanedTopic = topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedTopic.isEmpty else {
+            finish(.failure(intent: "create_diagram", spoken: "Tell me what the diagram should show.", frontmostApp: application?.localizedName), command: command, completion: completion)
+            return
+        }
+
+        snapshot.status = "Diagramming"
+        snapshot.frontmostApp = application?.localizedName ?? "PadKey"
+        snapshot.detectedIntent = "create_diagram"
+        snapshot.actionResult = "Generating a Mermaid diagram locally"
+        publishSnapshot()
+
+        let system = """
+        Create a concise Mermaid diagram from the user's topic.
+        Return Mermaid code only, with no markdown fence and no explanation.
+        Prefer flowchart TD unless a sequence diagram is clearly better.
+        Use short readable labels. Do not invent private facts.
+        """
+
+        localModel.chat(system: system, user: cleanedTopic, requireJSON: false, temperature: 0.2) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let output):
+                    let mermaid = Self.cleanMermaid(output)
+                    let note = """
+                    Voice diagram: \(cleanedTopic)
+
+                    ```mermaid
+                    \(mermaid)
+                    ```
+                    """
+                    do {
+                        try NotesTool.makeNote(content: note)
+                        self.finish(self.success(
+                            intent: "create_diagram",
+                            spoken: "I created a Mermaid diagram note in Notes.",
+                            actions: [MacCommandActionRecord(type: "create_diagram_note", appName: "Notes", nodeId: nil, target: cleanedTopic, text: mermaid)],
+                            frontmostApp: "Notes",
+                            target: cleanedTopic,
+                            result: "Created a diagram note locally"
+                        ), command: command, completion: completion)
+                    } catch {
+                        self.finish(self.toolFailure(intent: "create_diagram", error: error, app: "Notes"), command: command, completion: completion)
+                    }
+                case .failure(let error):
+                    self.finish(self.toolFailure(intent: "create_diagram", error: error, app: application?.localizedName ?? "PadKey"), command: command, completion: completion)
+                }
+            }
+        }
+    }
+
+    private static func cleanModelText(_ text: String, maxCharacters: Int) -> String {
+        let cleaned = text
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cleaned.count > maxCharacters else { return cleaned }
+        return String(cleaned.prefix(maxCharacters)).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
+    }
+
+    private static func cleanMermaid(_ text: String) -> String {
+        var cleaned = text
+            .replacingOccurrences(of: "```mermaid", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty {
+            cleaned = "flowchart TD\n    A[Idea] --> B[Next step]"
+        }
+        let lower = cleaned.lowercased()
+        if !lower.hasPrefix("flowchart")
+            && !lower.hasPrefix("sequencediagram")
+            && !lower.hasPrefix("mindmap") {
+            cleaned = "flowchart TD\n    A[\(cleaned.replacingOccurrences(of: "\n", with: " "))]"
+        }
+        return String(cleaned.prefix(4_000)).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func makeConfirmation(
@@ -779,6 +1096,24 @@ final class MacCommandCoordinator {
             actionResult: result,
             clarification: nil,
             options: nil,
+            confirmationRequired: false,
+            confirmationId: nil,
+            permissionRequired: nil,
+            message: nil
+        )
+    }
+
+    private func clarification(spoken: String, app: String?, options: [String]) -> MacCommandResponse {
+        MacCommandResponse(
+            ok: false,
+            intent: "ambiguous_command",
+            spoken: spoken,
+            actions: [],
+            frontmostApp: app,
+            selectedTarget: nil,
+            actionResult: "Waiting for clarification",
+            clarification: spoken,
+            options: options,
             confirmationRequired: false,
             confirmationId: nil,
             permissionRequired: nil,

@@ -58,6 +58,26 @@ final class PipelineDiagnosticsTests: XCTestCase {
     }
 
     func testTextCleanupCourseCorrectionBasics() {
-        XCTAssertEqual(TextCleanup.clean("um hello comma new line bullet point ship it"), "hello,\n- ship it")
+        XCTAssertEqual(TextCleanup.clean("um hello comma new line bullet point ship it"), "Hello,\n- ship it")
+    }
+
+    func testTextCleanupHandlesSpokenPunctuationAndGrammar() {
+        XCTAssertEqual(
+            TextCleanup.clean("like i need open quote PadKey close quote comma new line what do i test question mark"),
+            "I need \"PadKey\",\nWhat do I test?"
+        )
+        XCTAssertEqual(
+            TextCleanup.clean("uh send this to chukwudi at sign example dot com"),
+            "Send this to chukwudi@example.com"
+        )
+    }
+
+    func testLiveCaptionFormatterBatchesReadableChunks() {
+        let text = "This is a quiet caption that should be readable by an audience. It should move into another batch when the sentence finishes."
+        let batches = LiveCaptionFormatter.batches(from: text, wordsPerBatch: 10, maxBatches: 4)
+
+        XCTAssertGreaterThanOrEqual(batches.count, 2)
+        XCTAssertEqual(batches.first, "This is a quiet caption that should be readable by an audience.")
+        XCTAssertEqual(LiveCaptionFormatter.audienceText(from: text), "It should move into another batch when the sentence finishes.")
     }
 }

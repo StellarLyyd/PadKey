@@ -3,6 +3,7 @@ import Foundation
 
 enum UIAutomationError: LocalizedError {
     case appNotFound(String)
+    case ambiguousApp(String, [String])
     case launchFailed(String)
     case appleScriptFailed(String)
     case invalidURL
@@ -11,6 +12,7 @@ enum UIAutomationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .appNotFound(let name): return "\(name) is not installed on this Mac."
+        case .ambiguousApp(let name, let options): return "\(name) matches more than one app: \(options.joined(separator: ", "))."
         case .launchFailed(let name): return "\(name) could not be opened."
         case .appleScriptFailed(let message): return message
         case .invalidURL: return "The requested address is invalid."
@@ -20,21 +22,99 @@ enum UIAutomationError: LocalizedError {
 }
 
 enum UIAutomation {
+    struct ResolvedApplication: Equatable {
+        let displayName: String
+        let url: URL
+    }
+
     @discardableResult
     static func openApplication(named name: String) throws -> NSRunningApplication? {
+        let resolved = try resolveApplication(named: name)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-a", name]
+        process.arguments = [resolved.url.path]
         do {
             try process.run()
             process.waitUntilExit()
         } catch {
-            throw UIAutomationError.launchFailed(name)
+            throw UIAutomationError.launchFailed(resolved.displayName)
         }
         guard process.terminationStatus == 0 else { throw UIAutomationError.appNotFound(name) }
         return NSWorkspace.shared.runningApplications.first {
-            $0.localizedName?.caseInsensitiveCompare(name) == .orderedSame
+            $0.localizedName?.caseInsensitiveCompare(resolved.displayName) == .orderedSame
         }
+    }
+
+    static func resolveApplication(named rawName: String) throws -> ResolvedApplication {
+        let query = normalizedAppName(rawName)
+        let aliases: [String: [String]] = [
+            "chrome": ["google chrome"],
+            "browser": ["google chrome", "safari"],
+            "settings": ["system settings"],
+            "system preferences": ["system settings"],
+            "facetime": ["facetime"],
+            "x code": ["xcode"],
+            "vs code": ["visual studio code"],
+            "music": ["music"],
+            "apple music": ["music"]
+        ]
+        let candidateQueries = aliases[query] ?? [query]
+        let apps = installedApplications()
+
+        var matches: [ResolvedApplication] = []
+        for candidate in candidateQueries {
+            matches.append(contentsOf: apps.filter { app in
+                let normalized = normalizedAppName(app.displayName)
+                return normalized == candidate || normalized.hasSuffix(" \(candidate)")
+            })
+        }
+        if matches.isEmpty {
+            matches = apps.filter { normalizedAppName($0.displayName).contains(query) }
+        }
+
+        let unique = Dictionary(grouping: matches, by: { $0.url.path })
+            .compactMap { $0.value.first }
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+
+        guard !unique.isEmpty else { throw UIAutomationError.appNotFound(rawName) }
+        if unique.count > 1 {
+            let names = unique.prefix(5).map(\.displayName)
+            throw UIAutomationError.ambiguousApp(rawName, Array(names))
+        }
+        return unique[0]
+    }
+
+    private static func installedApplications() -> [ResolvedApplication] {
+        let roots = [
+            URL(fileURLWithPath: "/Applications"),
+            URL(fileURLWithPath: "/System/Applications"),
+            URL(fileURLWithPath: "/System/Applications/Utilities"),
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")
+        ]
+        var seen = Set<String>()
+        var apps: [ResolvedApplication] = []
+        for root in roots {
+            guard let enumerator = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            ) else { continue }
+            for case let url as URL in enumerator where url.pathExtension == "app" {
+                guard seen.insert(url.path).inserted else { continue }
+                apps.append(ResolvedApplication(displayName: url.deletingPathExtension().lastPathComponent, url: url))
+            }
+        }
+        return apps
+    }
+
+    private static func normalizedAppName(_ text: String) -> String {
+        text.lowercased()
+            .replacingOccurrences(of: #"^(?:the\s+)?(?:app\s+)?"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+app$"#, with: "", options: .regularExpression)
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func runAppleScript(_ source: String) throws -> NSAppleEventDescriptor? {

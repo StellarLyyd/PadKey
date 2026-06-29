@@ -78,6 +78,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.openHub(page: "Settings")
             }
         }
+        if arguments.contains("--show-agent") {
+            openedWindow = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.openHub(page: "Agent Control")
+            }
+        }
         if arguments.contains("--show-scratchpad") {
             openedWindow = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -392,7 +398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         response.confirmationRequired ? "Confirmation needed" : response.ok ? "PadKey action complete" : "PadKey needs attention",
                         detail: response.spoken
                     )
-                    if response.permissionRequired != nil || response.clarification != nil || response.confirmationRequired {
+                    if response.permissionRequired != nil || response.clarification != nil || response.confirmationRequired || !response.ok {
                         appDelegate.openHub(page: "Agent Control")
                     }
                 }

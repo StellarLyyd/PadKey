@@ -11,6 +11,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         case studio = "Studio"
         case home = "Overview"
         case pipeline = "Dictation"
+        case liveCaptions = "Live Captions"
         case agent = "Agent Control"
         case signalMonitor = "Signal Monitor"
         case advanced = "Advanced"
@@ -31,6 +32,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
             case .insights: return "chart.bar"
             case .sync: return "waveform.badge.mic"
             case .pipeline: return "point.3.connected.trianglepath.dotted"
+            case .liveCaptions: return "captions.bubble"
             case .agent: return "command"
             case .signalMonitor: return "waveform.path.ecg"
             case .advanced: return "slider.horizontal.3"
@@ -48,6 +50,8 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
     private let store: PadKeyStore
     private let commandCoordinator = MacCommandCoordinator.shared
     private let syncDictationController = DictationController()
+    private let liveCaptionController = DictationController()
+    private let captionPlayback = CaptionPlaybackService.shared
     private var page: Page = .studio
     private let root = NSStackView()
     private let sidebar = NSStackView()
@@ -77,6 +81,17 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
     private weak var syncTranscriptLabel: NSTextField?
     private weak var syncRecordButton: HoverButton?
     private weak var syncMeterView: SyncMeterView?
+    private var liveCaptionIsRecording = false
+    private var liveCaptionStartedAt: Date?
+    private var liveCaptionRawTranscript = ""
+    private var liveCaptionCleanTranscript = ""
+    private var liveCaptionBatches: [String] = []
+    private var liveCaptionStatus = "Ready for captions"
+    private var liveCaptionPlaybackStatus = "Playback ready"
+    private var liveCaptionRenderScheduled = false
+    private weak var liveCaptionStatusLabel: NSTextField?
+    private weak var liveCaptionAudienceLabel: NSTextField?
+    private weak var liveCaptionMeterView: SyncMeterView?
     private weak var agentCommandField: NSTextField?
     private var hardwareStatus = PadKeyHardwareAudioService.shared.status
     private var lastSignalMonitorRenderAt = Date.distantPast
@@ -160,6 +175,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
 
     func windowWillClose(_ notification: Notification) {
         cancelSyncRecording()
+        cancelLiveCaptionRecording()
     }
 
     func showScratchpad(with text: String? = nil) {
@@ -348,6 +364,9 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         if page == .sync, next != .sync {
             cancelSyncRecording()
         }
+        if page == .liveCaptions, next != .liveCaptions {
+            cancelLiveCaptionRecording()
+        }
         page = next
         buildSidebar()
         render()
@@ -360,6 +379,9 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         }
         if page == .sync {
             cancelSyncRecording()
+        }
+        if page == .liveCaptions {
+            cancelLiveCaptionRecording()
         }
         page = .home
         buildSidebar()
@@ -392,6 +414,8 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
             renderSync()
         case .pipeline:
             renderPipeline()
+        case .liveCaptions:
+            renderLiveCaptions()
         case .agent:
             renderAgentControl()
         case .signalMonitor:
@@ -499,6 +523,21 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         contentStack.addArrangedSubview(pipelineDiagnosticsTable())
     }
 
+    private func renderLiveCaptions() {
+        liveCaptionStatusLabel = nil
+        liveCaptionAudienceLabel = nil
+        liveCaptionMeterView = nil
+
+        contentStack.addArrangedSubview(pageHeader("Live Captions", buttonTitle: liveCaptionIsRecording ? "Stop captioning" : "Start captioning", action: #selector(toggleLiveCaptions)))
+        contentStack.addArrangedSubview(subtitle("A big audience-facing caption surface for whispered or quiet speech. PadKey filters fillers, applies punctuation, preserves your dictionary, and keeps playback local."))
+        contentStack.addArrangedSubview(liveCaptionAudiencePanel())
+        contentStack.addArrangedSubview(liveCaptionControlPanel())
+        contentStack.addArrangedSubview(sectionLabel("CAPTION BATCHES"))
+        contentStack.addArrangedSubview(liveCaptionBatchList())
+        contentStack.addArrangedSubview(sectionLabel("PLAYBACK VOICE"))
+        contentStack.addArrangedSubview(liveCaptionVoicePanel())
+    }
+
     private func renderDictionary() {
         contentStack.addArrangedSubview(pageHeader("Dictionary", buttonTitle: "Add word", action: #selector(addDictionaryWord)))
         contentStack.addArrangedSubview(hero(
@@ -574,15 +613,15 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
     }
 
     private func renderAgentControl() {
-        contentStack.addArrangedSubview(title("Agent Control"))
-        contentStack.addArrangedSubview(subtitle("Turn speech from the selected input source into safe Mac actions. Current source: \(store.selectedInputSource.displayName)."))
-        contentStack.addArrangedSubview(inputSourcePanel())
+        contentStack.addArrangedSubview(agentRuntimeHeader())
+        contentStack.addArrangedSubview(agentCapabilityStrip())
+        contentStack.addArrangedSubview(agentRealtimeStackPanel())
         contentStack.addArrangedSubview(agentCommandComposer())
-        contentStack.addArrangedSubview(sectionLabel("CURRENT ACTION"))
+        contentStack.addArrangedSubview(sectionLabel("LIVE RUNTIME"))
         contentStack.addArrangedSubview(agentActionStatus())
-        contentStack.addArrangedSubview(sectionLabel("SUPPORTED ACTIONS"))
+        contentStack.addArrangedSubview(sectionLabel("CONTROL SURFACE"))
         contentStack.addArrangedSubview(agentSupportedActionsTable())
-        contentStack.addArrangedSubview(sectionLabel("PRODUCTION TESTS"))
+        contentStack.addArrangedSubview(sectionLabel("SMOKE TESTS"))
         contentStack.addArrangedSubview(agentTestActions())
     }
 
@@ -623,11 +662,223 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
             "The macOS app receives that PadKey stream natively, not just inside the Studio browser view.",
             "The selected input source controls dictation and agent commands. MacBook microphone capture is only used when explicitly selected.",
             "Press and hold fn to capture from the selected source. Release fn to transcribe and act.",
-            "If the transcript looks like a command, Agent Control maps it to Mac actions such as open app, click, type, copy, paste, scroll, and close window.",
+            "If the transcript looks like a command, Agent Control maps it to Mac actions such as open app, live UI inspection, click, type, copy, paste, scroll, and close window.",
             "Signal Monitor shows the actual incoming PadKey signal so you can verify whether audio came from hardware or the MacBook mic."
         ]))
         contentStack.addArrangedSubview(sectionLabel("PERMISSIONS"))
         contentStack.addArrangedSubview(permissionStatusTable())
+    }
+
+    private func liveCaptionAudiencePanel() -> NSView {
+        let panel = RoundedView(fillColor: PadKeyTheme.ink, radius: 14)
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        panel.heightAnchor.constraint(equalToConstant: 360).isActive = true
+
+        let badge = NSTextField(labelWithString: liveCaptionIsRecording ? "LIVE" : "READY")
+        badge.font = .systemFont(ofSize: 12, weight: .bold)
+        badge.textColor = PadKeyTheme.ink
+        badge.alignment = .center
+        badge.wantsLayer = true
+        badge.layer?.backgroundColor = (liveCaptionIsRecording ? PadKeyTheme.mint : NSColor.white.withAlphaComponent(0.86)).cgColor
+        badge.layer?.cornerRadius = 7
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.widthAnchor.constraint(equalToConstant: 72).isActive = true
+        badge.heightAnchor.constraint(equalToConstant: 28).isActive = true
+
+        let caption = NSTextField(wrappingLabelWithString: liveCaptionDisplayText)
+        caption.font = liveCaptionFont(for: liveCaptionDisplayText)
+        caption.textColor = .white
+        caption.alignment = .center
+        caption.maximumNumberOfLines = 6
+        caption.lineBreakMode = .byWordWrapping
+
+        let meter = SyncMeterView()
+        meter.update(level: liveCaptionIsRecording ? 0.22 : 0)
+        meter.translatesAutoresizingMaskIntoConstraints = false
+        meter.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        meter.heightAnchor.constraint(equalToConstant: 46).isActive = true
+
+        let status = NSTextField(labelWithString: liveCaptionStatus)
+        status.font = .systemFont(ofSize: 12, weight: .semibold)
+        status.textColor = NSColor.white.withAlphaComponent(0.76)
+
+        [badge, caption, meter, status].forEach {
+            panel.addSubview($0)
+            $0.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        NSLayoutConstraint.activate([
+            badge.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 22),
+            badge.topAnchor.constraint(equalTo: panel.topAnchor, constant: 20),
+            meter.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -22),
+            meter.topAnchor.constraint(equalTo: panel.topAnchor, constant: 18),
+            caption.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 38),
+            caption.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -38),
+            caption.centerYAnchor.constraint(equalTo: panel.centerYAnchor, constant: 6),
+            status.centerXAnchor.constraint(equalTo: panel.centerXAnchor),
+            status.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -22)
+        ])
+
+        liveCaptionAudienceLabel = caption
+        liveCaptionStatusLabel = status
+        liveCaptionMeterView = meter
+        return panel
+    }
+
+    private func liveCaptionControlPanel() -> NSView {
+        let panel = RoundedView(fillColor: PadKeyTheme.panelBackground, radius: 12, strokeColor: NSColor.separatorColor.withAlphaComponent(0.42), strokeWidth: 1)
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.widthAnchor.constraint(equalToConstant: 760).isActive = true
+
+        let rows = NSStackView()
+        rows.orientation = .vertical
+        rows.alignment = .leading
+        rows.spacing = 14
+
+        let buttons = NSStackView()
+        buttons.orientation = .horizontal
+        buttons.spacing = 10
+        buttons.addArrangedSubview(primaryButton(liveCaptionIsRecording ? "Stop captioning" : "Start captioning", action: #selector(toggleLiveCaptions)))
+        buttons.addArrangedSubview(primaryButton("Play captions", action: #selector(playLiveCaptions), inverted: true))
+        buttons.addArrangedSubview(primaryButton("Stop audio", action: #selector(stopLiveCaptionPlayback), inverted: true))
+        buttons.addArrangedSubview(primaryButton("Clear", action: #selector(clearLiveCaptions), inverted: true))
+
+        rows.addArrangedSubview(buttons)
+        rows.addArrangedSubview(settingsDetailRow("Input", store.selectedInputSource.displayName))
+        rows.addArrangedSubview(settingsDetailRow("Engine", store.pipelineSettings.effectiveRecognitionEngine.displayName))
+        rows.addArrangedSubview(settingsDetailRow("Cleanup", "Spoken punctuation, filler removal, sentence casing, snippets, and dictionary words."))
+        rows.addArrangedSubview(settingsDetailRow("Playback", liveCaptionPlaybackStatus))
+
+        panel.addSubview(rows)
+        rows.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            rows.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 18),
+            rows.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -18),
+            rows.topAnchor.constraint(equalTo: panel.topAnchor, constant: 18),
+            rows.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -18)
+        ])
+        return panel
+    }
+
+    private func liveCaptionBatchList() -> NSView {
+        guard !liveCaptionBatches.isEmpty else {
+            return emptyState("No caption batches yet", detail: "Start captioning and speak naturally. PadKey will show clean batches here as it hears you.")
+        }
+
+        let list = NSStackView()
+        list.orientation = .vertical
+        list.spacing = 8
+        list.translatesAutoresizingMaskIntoConstraints = false
+        list.widthAnchor.constraint(equalToConstant: 760).isActive = true
+
+        for (index, batch) in liveCaptionBatches.enumerated() {
+            list.addArrangedSubview(liveCaptionBatchRow(number: index + 1, text: batch))
+        }
+
+        return list
+    }
+
+    private func liveCaptionBatchRow(number: Int, text: String) -> NSView {
+        let row = RoundedView(fillColor: PadKeyTheme.panelBackground, radius: 10, strokeColor: NSColor.separatorColor.withAlphaComponent(0.32), strokeWidth: 1)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 68).isActive = true
+
+        let index = NSTextField(labelWithString: "\(number)")
+        index.font = .monospacedDigitSystemFont(ofSize: 13, weight: .bold)
+        index.textColor = PadKeyTheme.ink
+        index.alignment = .center
+        index.wantsLayer = true
+        index.layer?.backgroundColor = PadKeyTheme.softSurface.cgColor
+        index.layer?.cornerRadius = 8
+        index.translatesAutoresizingMaskIntoConstraints = false
+        index.widthAnchor.constraint(equalToConstant: 34).isActive = true
+        index.heightAnchor.constraint(equalToConstant: 30).isActive = true
+
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(ofSize: 18, weight: .semibold)
+        label.textColor = PadKeyTheme.ink
+        label.maximumNumberOfLines = 3
+
+        [index, label].forEach {
+            row.addSubview($0)
+            $0.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        NSLayoutConstraint.activate([
+            index.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 16),
+            index.topAnchor.constraint(equalTo: row.topAnchor, constant: 18),
+            label.leadingAnchor.constraint(equalTo: index.trailingAnchor, constant: 14),
+            label.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -18),
+            label.topAnchor.constraint(equalTo: row.topAnchor, constant: 14),
+            label.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -14)
+        ])
+        return row
+    }
+
+    private func liveCaptionVoicePanel() -> NSView {
+        let panel = RoundedView(fillColor: PadKeyTheme.panelBackground, radius: 12, strokeColor: NSColor.separatorColor.withAlphaComponent(0.42), strokeWidth: 1)
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.widthAnchor.constraint(equalToConstant: 760).isActive = true
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 14
+
+        let title = NSTextField(labelWithString: "Local playback and voice profile")
+        title.font = .systemFont(ofSize: 15, weight: .bold)
+        title.textColor = PadKeyTheme.ink
+
+        let body = NSTextField(wrappingLabelWithString: "PadKey only learns a personal voice profile after explicit samples. Today those samples improve phrasing and spelling context; an open-source cloned voice can be attached locally through Piper/OpenVoice-style tooling once a model is configured.")
+        body.font = .systemFont(ofSize: 12, weight: .medium)
+        body.textColor = PadKeyTheme.secondaryInk
+        body.maximumNumberOfLines = 3
+
+        let buttons = NSStackView()
+        buttons.orientation = .horizontal
+        buttons.spacing = 10
+        buttons.addArrangedSubview(primaryButton("Play captions", action: #selector(playLiveCaptions)))
+        buttons.addArrangedSubview(primaryButton("Save as voice sample", action: #selector(saveLiveCaptionsAsVoiceSample), inverted: true))
+        buttons.addArrangedSubview(primaryButton("Open Voice Setup", action: #selector(openVoiceSetupFromLiveCaptions), inverted: true))
+
+        stack.addArrangedSubview(title)
+        stack.addArrangedSubview(body)
+        stack.addArrangedSubview(settingsDetailRow("Open source", captionPlayback.statusMessage))
+        stack.addArrangedSubview(settingsDetailRow("Profile", "\(store.voiceSyncSamples.count) saved samples; local-only and user-triggered."))
+        stack.addArrangedSubview(settingsDetailRow("Consent", "No background cloning. Save samples only when the speaker chooses it."))
+        stack.addArrangedSubview(buttons)
+
+        panel.addSubview(stack)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 18),
+            stack.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -18),
+            stack.topAnchor.constraint(equalTo: panel.topAnchor, constant: 18),
+            stack.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -18)
+        ])
+        return panel
+    }
+
+    private var liveCaptionDisplayText: String {
+        let text = LiveCaptionFormatter.audienceText(from: liveCaptionCleanTranscript)
+        return text.isEmpty
+            ? "Start captioning, then whisper or speak naturally."
+            : text
+    }
+
+    private func liveCaptionFont(for text: String) -> NSFont {
+        switch text.count {
+        case 0...72:
+            return .systemFont(ofSize: 50, weight: .bold)
+        case 73...150:
+            return .systemFont(ofSize: 40, weight: .bold)
+        case 151...240:
+            return .systemFont(ofSize: 32, weight: .bold)
+        default:
+            return .systemFont(ofSize: 26, weight: .semibold)
+        }
     }
 
     private func inputSourcePanel() -> NSView {
@@ -702,17 +953,15 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
     }
 
     private func agentSupportedActionsTable() -> NSView {
-        let actions: [(String, String, String, String, String, String)] = [
-            ("Open app", "Open Safari / Open FaceTime", "Launches a named app", "Implemented", "None", "Global"),
-            ("Prepare FaceTime call", "Prepare FaceTime call", "Opens FaceTime and stages the call flow", "Implemented", "Accessibility", "Global"),
-            ("Make a note", "Make a note ...", "Creates a local PadKey note", "Implemented", "None", "Global"),
-            ("Search web", "Search for assistive speech devices", "Opens browser search", "Implemented", "None", "Global"),
-            ("Type text", "Type this into the selected field", "Inserts transcript into focused editor", "Implemented", "Accessibility", "Global"),
-            ("Click target", "Click the input field", "Clicks current/selected UI target", "Implemented", "Accessibility", "App focus"),
-            ("Copy / Paste", "Copy that / Paste that", "Uses system clipboard actions", "Implemented", "Accessibility", "Global"),
-            ("Scroll", "Scroll down", "Sends scroll intent", "Implemented", "Accessibility", "Global"),
-            ("Go back", "Go back", "Browser/back navigation intent", "Implemented", "Accessibility", "App focus"),
-            ("Close window", "Close window", "Closes the active window", "Implemented", "Accessibility", "Global")
+        let actions: [(String, String, String, String)] = [
+            ("App launch and focus", "Open Safari / Open FaceTime / Open Notes", "LaunchServices and deterministic app tools", "Live"),
+            ("Frontmost-app UI", "Choose the second option in this app", "Accessibility tree plus local action planner", PermissionHelper.isAccessibilityTrusted ? "Live" : "Needs Accessibility"),
+            ("Fields and controls", "Fill the search field / click Continue / select PDF", "Direct AX match first, local planner fallback", PermissionHelper.isAccessibilityTrusted ? "Live" : "Needs Accessibility"),
+            ("Writing surfaces", "Make a note / append to current note / paste that", "AppleScript, text insertion, clipboard actions", "Live"),
+            ("Navigation", "Scroll down / go back / close window", "Keyboard and scroll adapters", "Live"),
+            ("Page understanding", "Summarize this page", "Readable Accessibility text plus local model", PermissionHelper.isAccessibilityTrusted ? "Live" : "Needs Accessibility"),
+            ("Communications", "Prepare FaceTime call / send message", "Preview/confirm before calls or sends", "Guarded"),
+            ("Atlas adapters", "Volume, media, system, browser, scriptable apps", "Python atlas/runtime has deterministic adapter plans", "Engine ready")
         ]
         let panel = RoundedView(fillColor: PadKeyTheme.panelBackground, radius: 12, strokeColor: NSColor.separatorColor.withAlphaComponent(0.42), strokeWidth: 1)
         panel.translatesAutoresizingMaskIntoConstraints = false
@@ -722,10 +971,10 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         stack.spacing = 0
         panel.addSubview(stack)
         stack.fillSuperview()
-        stack.addArrangedSubview(actionRow(["Action", "Examples", "Does", "Status", "Permission", "Scope"], isHeader: true))
+        stack.addArrangedSubview(actionRow(["Surface", "Voice examples", "Runtime", "Status"], isHeader: true))
         for action in actions {
             stack.addArrangedSubview(historySeparator())
-            stack.addArrangedSubview(actionRow([action.0, action.1, action.2, action.3, action.4, action.5], isHeader: false))
+            stack.addArrangedSubview(actionRow([action.0, action.1, action.2, action.3], isHeader: false))
         }
         return panel
     }
@@ -737,17 +986,29 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         row.edgeInsets = NSEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
         row.translatesAutoresizingMaskIntoConstraints = false
         row.widthAnchor.constraint(equalToConstant: 760).isActive = true
-        let widths: [CGFloat] = [96, 148, 164, 86, 96, 70]
+        let widths: [CGFloat] = values.count == 4 ? [146, 246, 220, 86] : [96, 148, 164, 86, 96, 70]
         for (index, value) in values.enumerated() {
             let label = NSTextField(wrappingLabelWithString: value)
             label.font = .systemFont(ofSize: isHeader ? 11 : 10, weight: isHeader ? .bold : .medium)
-            label.textColor = isHeader ? PadKeyTheme.ink : PadKeyTheme.secondaryInk
+            if !isHeader, index == values.count - 1 {
+                label.textColor = statusColor(value)
+            } else {
+                label.textColor = isHeader ? PadKeyTheme.ink : PadKeyTheme.secondaryInk
+            }
             label.maximumNumberOfLines = 3
             label.translatesAutoresizingMaskIntoConstraints = false
             label.widthAnchor.constraint(equalToConstant: widths[min(index, widths.count - 1)]).isActive = true
             row.addArrangedSubview(label)
         }
         return row
+    }
+
+    private func statusColor(_ value: String) -> NSColor {
+        let lower = value.lowercased()
+        if lower.contains("live") { return PadKeyTheme.teal }
+        if lower.contains("guarded") || lower.contains("engine") { return PadKeyTheme.amber }
+        if lower.contains("needs") { return NSColor.systemRed.withAlphaComponent(0.86) }
+        return PadKeyTheme.secondaryInk
     }
 
     private func permissionStatusTable() -> NSView {
@@ -836,14 +1097,14 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         )
         panel.translatesAutoresizingMaskIntoConstraints = false
         panel.widthAnchor.constraint(equalToConstant: 760).isActive = true
-        panel.heightAnchor.constraint(equalToConstant: 116).isActive = true
+        panel.heightAnchor.constraint(equalToConstant: 126).isActive = true
 
         let label = NSTextField(labelWithString: "COMMAND")
         label.font = .systemFont(ofSize: 10, weight: .bold)
         label.textColor = PadKeyTheme.secondaryInk
 
-        let field = NSTextField(string: "Hey PadKey, make a note PadKey test successful")
-        field.placeholderString = "Hey PadKey, fill the search field with…"
+        let field = NSTextField(string: "Tell me about how PadKey should handle accents")
+        field.placeholderString = "Try: make a diagram of PadKey voice control"
         field.font = .systemFont(ofSize: 14)
         field.isBezeled = true
         field.bezelStyle = .roundedBezel
@@ -851,7 +1112,12 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
 
         let run = primaryButton("Run command", action: #selector(runAgentCommand))
 
-        [label, field, run].forEach {
+        let detail = NSTextField(wrappingLabelWithString: "Runs the same native path as hold-to-talk: local cleanup, command routing, Ollama chat/planning, and Accessibility actions.")
+        detail.font = .systemFont(ofSize: 11, weight: .medium)
+        detail.textColor = PadKeyTheme.secondaryInk
+        detail.maximumNumberOfLines = 2
+
+        [label, field, run, detail].forEach {
             panel.addSubview($0)
             $0.translatesAutoresizingMaskIntoConstraints = false
         }
@@ -864,9 +1130,195 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
             field.heightAnchor.constraint(equalToConstant: 38),
             run.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -18),
             run.centerYAnchor.constraint(equalTo: field.centerYAnchor),
-            run.widthAnchor.constraint(equalToConstant: 122)
+            run.widthAnchor.constraint(equalToConstant: 122),
+            detail.leadingAnchor.constraint(equalTo: field.leadingAnchor),
+            detail.trailingAnchor.constraint(equalTo: field.trailingAnchor),
+            detail.topAnchor.constraint(equalTo: field.bottomAnchor, constant: 10)
         ])
         agentCommandField = field
+        return panel
+    }
+
+    private func agentRuntimeHeader() -> NSView {
+        let panel = RoundedView(fillColor: PadKeyTheme.ink, radius: 14)
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        panel.heightAnchor.constraint(greaterThanOrEqualToConstant: 188).isActive = true
+
+        let badge = NSTextField(labelWithString: "Native runtime wired")
+        badge.font = .systemFont(ofSize: 11, weight: .bold)
+        badge.textColor = PadKeyTheme.ink
+        badge.alignment = .center
+        badge.wantsLayer = true
+        badge.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.86).cgColor
+        badge.layer?.cornerRadius = 6
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.widthAnchor.constraint(equalToConstant: 138).isActive = true
+        badge.heightAnchor.constraint(equalToConstant: 24).isActive = true
+
+        let headline = NSTextField(wrappingLabelWithString: "Voice control for the whole Mac")
+        headline.font = .systemFont(ofSize: 26, weight: .bold)
+        headline.textColor = .white
+        headline.maximumNumberOfLines = 2
+
+        let body = NSTextField(wrappingLabelWithString: "No wake phrase required. PadKey cleans spoken text, understands personal vocabulary, chats through the local model, and routes command-shaped speech into a live frontmost-app runtime with native Accessibility.")
+        body.font = .systemFont(ofSize: 13, weight: .semibold)
+        body.textColor = NSColor.white.withAlphaComponent(0.86)
+        body.maximumNumberOfLines = 3
+
+        let source = NSTextField(labelWithString: "Input: \(store.selectedInputSource.displayName)")
+        source.font = .systemFont(ofSize: 12, weight: .bold)
+        source.textColor = PadKeyTheme.mint
+
+        [badge, headline, body, source].forEach {
+            panel.addSubview($0)
+            $0.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        NSLayoutConstraint.activate([
+            badge.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 22),
+            badge.topAnchor.constraint(equalTo: panel.topAnchor, constant: 22),
+            headline.leadingAnchor.constraint(equalTo: badge.leadingAnchor),
+            headline.trailingAnchor.constraint(lessThanOrEqualTo: panel.trailingAnchor, constant: -22),
+            headline.topAnchor.constraint(equalTo: badge.bottomAnchor, constant: 16),
+            body.leadingAnchor.constraint(equalTo: headline.leadingAnchor),
+            body.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -24),
+            body.topAnchor.constraint(equalTo: headline.bottomAnchor, constant: 10),
+            source.leadingAnchor.constraint(equalTo: headline.leadingAnchor),
+            source.topAnchor.constraint(equalTo: body.bottomAnchor, constant: 14),
+            source.bottomAnchor.constraint(lessThanOrEqualTo: panel.bottomAnchor, constant: -20)
+        ])
+
+        return panel
+    }
+
+    private func agentCapabilityStrip() -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 10
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.widthAnchor.constraint(equalToConstant: 760).isActive = true
+
+        row.addArrangedSubview(agentCapabilityTile(
+            value: "No wake",
+            label: "Activation",
+            detail: "Command mode listens for intent, not a magic phrase",
+            accent: PadKeyTheme.teal
+        ))
+        row.addArrangedSubview(agentCapabilityTile(
+            value: "Clean",
+            label: "Speech text",
+            detail: "Filler words, punctuation, and personal terms",
+            accent: PadKeyTheme.mint
+        ))
+        row.addArrangedSubview(agentCapabilityTile(
+            value: "Local",
+            label: "AI brain",
+            detail: "Ollama plans actions and answers chat",
+            accent: PadKeyTheme.purple
+        ))
+        row.addArrangedSubview(agentCapabilityTile(
+            value: PermissionHelper.isAccessibilityTrusted ? "Ready" : "Needed",
+            label: "Accessibility",
+            detail: PermissionHelper.isAccessibilityTrusted ? "Native actions can run" : "Grant permission to control apps",
+            accent: PermissionHelper.isAccessibilityTrusted ? PadKeyTheme.teal : PadKeyTheme.amber
+        ))
+        row.addArrangedSubview(agentCapabilityTile(
+            value: "Guarded",
+            label: "Risk gate",
+            detail: "Sends, calls, deletes pause for confirm",
+            accent: PadKeyTheme.amber
+        ))
+        return row
+    }
+
+    private func agentCapabilityTile(value: String, label: String, detail: String, accent: NSColor) -> NSView {
+        let tile = RoundedView(fillColor: PadKeyTheme.panelBackground, radius: 10, strokeColor: NSColor.separatorColor.withAlphaComponent(0.36), strokeWidth: 1)
+        tile.translatesAutoresizingMaskIntoConstraints = false
+        tile.widthAnchor.constraint(equalToConstant: 144).isActive = true
+        tile.heightAnchor.constraint(greaterThanOrEqualToConstant: 114).isActive = true
+
+        let bar = RoundedView(fillColor: accent, radius: 3)
+        let valueLabel = NSTextField(labelWithString: value)
+        valueLabel.font = .monospacedDigitSystemFont(ofSize: 22, weight: .bold)
+        valueLabel.textColor = PadKeyTheme.ink
+
+        let labelView = NSTextField(labelWithString: label.uppercased())
+        labelView.font = .systemFont(ofSize: 10, weight: .bold)
+        labelView.textColor = PadKeyTheme.secondaryInk
+
+        let detailLabel = NSTextField(wrappingLabelWithString: detail)
+        detailLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        detailLabel.textColor = PadKeyTheme.secondaryInk
+        detailLabel.maximumNumberOfLines = 2
+
+        [bar, valueLabel, labelView, detailLabel].forEach {
+            tile.addSubview($0)
+            $0.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        NSLayoutConstraint.activate([
+            bar.leadingAnchor.constraint(equalTo: tile.leadingAnchor, constant: 12),
+            bar.topAnchor.constraint(equalTo: tile.topAnchor, constant: 14),
+            bar.bottomAnchor.constraint(equalTo: tile.bottomAnchor, constant: -14),
+            bar.widthAnchor.constraint(equalToConstant: 5),
+            valueLabel.leadingAnchor.constraint(equalTo: bar.trailingAnchor, constant: 12),
+            valueLabel.topAnchor.constraint(equalTo: tile.topAnchor, constant: 14),
+            labelView.leadingAnchor.constraint(equalTo: valueLabel.leadingAnchor),
+            labelView.topAnchor.constraint(equalTo: valueLabel.bottomAnchor, constant: 5),
+            detailLabel.leadingAnchor.constraint(equalTo: valueLabel.leadingAnchor),
+            detailLabel.trailingAnchor.constraint(equalTo: tile.trailingAnchor, constant: -12),
+            detailLabel.topAnchor.constraint(equalTo: labelView.bottomAnchor, constant: 10),
+            detailLabel.bottomAnchor.constraint(lessThanOrEqualTo: tile.bottomAnchor, constant: -12)
+        ])
+
+        return tile
+    }
+
+    private func agentRealtimeStackPanel() -> NSView {
+        let panel = RoundedView(
+            fillColor: PadKeyTheme.panelBackground,
+            radius: 12,
+            strokeColor: NSColor.separatorColor.withAlphaComponent(0.42),
+            strokeWidth: 1
+        )
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.widthAnchor.constraint(equalToConstant: 760).isActive = true
+
+        let title = NSTextField(labelWithString: "Local realtime stack")
+        title.font = .systemFont(ofSize: 15, weight: .bold)
+        title.textColor = PadKeyTheme.ink
+
+        let detail = NSTextField(wrappingLabelWithString: "This build borrows the realtime voice-agent shape, but keeps the working path native: live captions, final local ASR, cleanup, local model reasoning, Accessibility actions, and macOS speech output.")
+        detail.font = .systemFont(ofSize: 12, weight: .medium)
+        detail.textColor = PadKeyTheme.secondaryInk
+        detail.maximumNumberOfLines = 3
+
+        let rows = NSStackView()
+        rows.orientation = .vertical
+        rows.spacing = 8
+        rows.addArrangedSubview(settingsDetailRow("Transcription", "\(store.pipelineSettings.effectiveRecognitionEngine.displayName); \(syncDictationController.liveTranscriptionStatus)"))
+        rows.addArrangedSubview(settingsDetailRow("Cleanup", "Spoken punctuation, filler-word handling, sentence casing, personal dictionary, snippets."))
+        rows.addArrangedSubview(settingsDetailRow("Conversation", "Local Ollama chat for explain, tell me about, chat about, and PadKey-prefixed questions."))
+        rows.addArrangedSubview(settingsDetailRow("Diagrams", "Voice requests create Mermaid diagram notes through the local model and Apple Notes."))
+        rows.addArrangedSubview(settingsDetailRow("Voice feedback", "macOS NSSpeechSynthesizer speaks command results and local answers. Cloud voice APIs are not required."))
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        stack.addArrangedSubview(title)
+        stack.addArrangedSubview(detail)
+        stack.addArrangedSubview(rows)
+
+        panel.addSubview(stack)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 18),
+            stack.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -18),
+            stack.topAnchor.constraint(equalTo: panel.topAnchor, constant: 18),
+            stack.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -18)
+        ])
         return panel
     }
 
@@ -884,15 +1336,28 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 12
-        stack.addArrangedSubview(settingsDetailRow("Status", state.status))
-        stack.addArrangedSubview(settingsDetailRow("Frontmost app", state.frontmostApp))
+        stack.spacing = 14
+
+        let statusLine = NSStackView()
+        statusLine.orientation = .horizontal
+        statusLine.alignment = .centerY
+        statusLine.spacing = 10
+        statusLine.translatesAutoresizingMaskIntoConstraints = false
+        statusLine.widthAnchor.constraint(equalToConstant: 724).isActive = true
+        statusLine.addArrangedSubview(agentStatusBadge(state.status))
+        statusLine.addArrangedSubview(agentStatusBadge(state.accessibilityStatus))
+        statusLine.addArrangedSubview(NSView())
+        let frontmost = NSTextField(labelWithString: state.frontmostApp)
+        frontmost.font = .systemFont(ofSize: 12, weight: .semibold)
+        frontmost.textColor = PadKeyTheme.secondaryInk
+        statusLine.addArrangedSubview(frontmost)
+        stack.addArrangedSubview(statusLine)
+
         stack.addArrangedSubview(settingsDetailRow("Last command", state.lastCommand))
         stack.addArrangedSubview(settingsDetailRow("Intent", state.detectedIntent))
-        stack.addArrangedSubview(settingsDetailRow("Accessibility", state.accessibilityStatus))
-        stack.addArrangedSubview(settingsDetailRow("UI target", state.selectedTarget))
+        stack.addArrangedSubview(settingsDetailRow("Target", state.selectedTarget))
         stack.addArrangedSubview(settingsDetailRow("Result", state.actionResult))
-        stack.addArrangedSubview(settingsDetailRow("Spoken response", state.spokenResponse))
+        stack.addArrangedSubview(settingsDetailRow("Response", state.spokenResponse))
         if !state.clarification.isEmpty {
             stack.addArrangedSubview(settingsDetailRow("Clarification", state.clarification))
         }
@@ -922,6 +1387,20 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         return panel
     }
 
+    private func agentStatusBadge(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 11, weight: .bold)
+        label.textColor = PadKeyTheme.ink
+        label.alignment = .center
+        label.wantsLayer = true
+        label.layer?.backgroundColor = (text.localizedCaseInsensitiveContains("permission") ? PadKeyTheme.amber : PadKeyTheme.mint).withAlphaComponent(0.42).cgColor
+        label.layer?.cornerRadius = 6
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.heightAnchor.constraint(equalToConstant: 24).isActive = true
+        label.widthAnchor.constraint(greaterThanOrEqualToConstant: 82).isActive = true
+        return label
+    }
+
     private func agentTestActions() -> NSView {
         let panel = RoundedView(
             fillColor: PadKeyTheme.softSurface.withAlphaComponent(0.56),
@@ -948,7 +1427,14 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         rowTwo.orientation = .horizontal
         rowTwo.spacing = 10
         rowTwo.addArrangedSubview(agentTestButton("Test Click Current Field", id: "click-current"))
+        rowTwo.addArrangedSubview(agentTestButton("Test Current App Choice", id: "computer-runtime"))
         rowTwo.addArrangedSubview(agentTestButton("Test Accessibility Tree", id: "accessibility-tree"))
+
+        let rowThree = NSStackView()
+        rowThree.orientation = .horizontal
+        rowThree.spacing = 10
+        rowThree.addArrangedSubview(agentTestButton("Test Local Chat", id: "local-chat"))
+        rowThree.addArrangedSubview(agentTestButton("Test Diagram Note", id: "diagram-note"))
 
         let stack = NSStackView()
         stack.orientation = .vertical
@@ -957,6 +1443,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         stack.addArrangedSubview(detail)
         stack.addArrangedSubview(rowOne)
         stack.addArrangedSubview(rowTwo)
+        stack.addArrangedSubview(rowThree)
         panel.addSubview(stack)
         stack.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -1894,7 +2381,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         ))
         left.addArrangedSubview(pipelineToggleRow(
             title: "Command mode",
-            detail: "Route explicit Hey PadKey commands through deterministic Mac tools and Accessibility.",
+            detail: "Route command-shaped speech through deterministic Mac tools and Accessibility instead of typing it.",
             isOn: settings.commandModeEnabled,
             action: #selector(toggleCommandMode)
         ))
@@ -2813,7 +3300,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
     }
 
     private func finishSyncRecording(transcript: String) {
-        let cleaned = TextCleanup.clean(transcript)
+        let cleaned = store.applyPersonalRules(to: TextCleanup.clean(transcript))
         let duration = Date().timeIntervalSince(syncStartedAt ?? Date())
         syncIsRecording = false
         syncStartedAt = nil
@@ -2846,6 +3333,202 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         syncStartedAt = nil
         syncLiveTranscript = ""
         syncMeterView?.update(level: 0)
+    }
+
+    @objc private func toggleLiveCaptions() {
+        liveCaptionIsRecording ? stopLiveCaptionRecording() : startLiveCaptionRecording()
+    }
+
+    private func startLiveCaptionRecording() {
+        guard !liveCaptionIsRecording else { return }
+
+        liveCaptionIsRecording = true
+        liveCaptionStartedAt = Date()
+        liveCaptionRawTranscript = ""
+        liveCaptionCleanTranscript = ""
+        liveCaptionBatches = []
+        liveCaptionStatus = "Listening..."
+        liveCaptionPlaybackStatus = "Playback ready"
+        liveCaptionController.recognitionEngine = store.pipelineSettings.effectiveRecognitionEngine
+        liveCaptionController.prefersLocalWhisper = store.pipelineSettings.effectiveRecognitionEngine != .appleSpeech
+        liveCaptionController.robustRetryEnabled = store.pipelineSettings.effectiveRobustRetryEnabled
+        liveCaptionController.inputSource = store.selectedInputSource
+        render()
+
+        liveCaptionController.start(
+            onPartial: { [weak self] transcript in
+                DispatchQueue.main.async {
+                    self?.updateLiveCaptionPartial(transcript)
+                }
+            },
+            onMeter: { [weak self] frame in
+                DispatchQueue.main.async {
+                    self?.liveCaptionMeterView?.update(level: frame.level)
+                }
+            },
+            onComplete: { [weak self] result in
+                DispatchQueue.main.async {
+                    self?.finishLiveCaptionRecording(result)
+                }
+            },
+            onError: { [weak self] error in
+                DispatchQueue.main.async {
+                    self?.failLiveCaptionRecording(error)
+                }
+            }
+        )
+    }
+
+    private func updateLiveCaptionPartial(_ transcript: String) {
+        guard liveCaptionIsRecording else { return }
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if Self.isDictationStatusMessage(trimmed) {
+            liveCaptionStatus = trimmed
+            liveCaptionStatusLabel?.stringValue = trimmed
+            return
+        }
+
+        liveCaptionRawTranscript = trimmed
+        let cleaned = LiveCaptionFormatter.clean(trimmed, store: store)
+        liveCaptionCleanTranscript = cleaned
+        liveCaptionBatches = LiveCaptionFormatter.batches(from: cleaned)
+        liveCaptionStatus = cleaned.isEmpty ? "Listening..." : "Captioning..."
+        liveCaptionAudienceLabel?.stringValue = liveCaptionDisplayText
+        liveCaptionAudienceLabel?.font = liveCaptionFont(for: liveCaptionDisplayText)
+        liveCaptionStatusLabel?.stringValue = liveCaptionStatus
+        scheduleLiveCaptionRender()
+    }
+
+    private func stopLiveCaptionRecording() {
+        guard liveCaptionIsRecording else { return }
+        liveCaptionStatus = "Finishing..."
+        liveCaptionStatusLabel?.stringValue = liveCaptionStatus
+        liveCaptionController.stop()
+    }
+
+    private func finishLiveCaptionRecording(_ result: DictationResult) {
+        let raw = result.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? liveCaptionRawTranscript
+            : result.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = LiveCaptionFormatter.clean(raw, store: store)
+        let duration = Date().timeIntervalSince(liveCaptionStartedAt ?? Date())
+
+        liveCaptionIsRecording = false
+        liveCaptionStartedAt = nil
+        liveCaptionRawTranscript = raw
+        liveCaptionCleanTranscript = cleaned
+        liveCaptionBatches = LiveCaptionFormatter.batches(from: cleaned)
+        liveCaptionStatus = cleaned.isEmpty ? "No caption text captured" : "Caption session ready"
+        liveCaptionMeterView?.update(level: 0)
+
+        if !cleaned.isEmpty {
+            store.addHistory(
+                text: cleaned,
+                rawText: raw,
+                appName: "Live Captions",
+                duration: duration,
+                recognitionEngine: result.engine.displayName,
+                usedRobustRetry: result.usedRobustRetry,
+                polishUsed: false,
+                polishProvider: nil,
+                latency: PipelineLatency(recordingDuration: duration, asrDuration: result.asrDuration, polishDuration: nil, insertionDuration: nil, totalDuration: duration),
+                inputSource: result.inputSource ?? store.selectedInputSource,
+                processedTranscript: cleaned,
+                confidenceStatus: result.fallbackReason,
+                audioURL: result.audioURL
+            )
+        } else {
+            NSSound.beep()
+        }
+
+        render()
+    }
+
+    private func failLiveCaptionRecording(_ error: Error) {
+        liveCaptionIsRecording = false
+        liveCaptionStartedAt = nil
+        liveCaptionStatus = error.localizedDescription
+        liveCaptionMeterView?.update(level: 0)
+        render()
+        NSSound.beep()
+    }
+
+    private func cancelLiveCaptionRecording() {
+        guard liveCaptionIsRecording else { return }
+        liveCaptionController.cancel()
+        liveCaptionIsRecording = false
+        liveCaptionStartedAt = nil
+        liveCaptionStatus = "Captioning stopped"
+        liveCaptionMeterView?.update(level: 0)
+    }
+
+    private func scheduleLiveCaptionRender() {
+        guard page == .liveCaptions, !liveCaptionRenderScheduled else { return }
+        liveCaptionRenderScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { [weak self] in
+            guard let self else { return }
+            self.liveCaptionRenderScheduled = false
+            guard self.page == .liveCaptions else { return }
+            self.render()
+        }
+    }
+
+    @objc private func playLiveCaptions() {
+        liveCaptionPlaybackStatus = captionPlayback.speak(liveCaptionCleanTranscript)
+        render()
+    }
+
+    @objc private func stopLiveCaptionPlayback() {
+        captionPlayback.stop()
+        liveCaptionPlaybackStatus = "Playback stopped"
+        render()
+    }
+
+    @objc private func clearLiveCaptions() {
+        captionPlayback.stop()
+        if liveCaptionIsRecording {
+            liveCaptionController.cancel()
+        }
+        liveCaptionIsRecording = false
+        liveCaptionStartedAt = nil
+        liveCaptionRawTranscript = ""
+        liveCaptionCleanTranscript = ""
+        liveCaptionBatches = []
+        liveCaptionStatus = "Ready for captions"
+        liveCaptionPlaybackStatus = "Playback ready"
+        render()
+    }
+
+    @objc private func saveLiveCaptionsAsVoiceSample() {
+        let cleaned = liveCaptionCleanTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else {
+            NSSound.beep()
+            liveCaptionPlaybackStatus = "No caption text to save yet."
+            render()
+            return
+        }
+
+        store.addVoiceSyncSample(prompt: "Live caption playback voice sample", transcript: cleaned, duration: Date().timeIntervalSince(liveCaptionStartedAt ?? Date()))
+        liveCaptionPlaybackStatus = "Saved this caption as a local voice profile sample."
+        render()
+    }
+
+    @objc private func openVoiceSetupFromLiveCaptions() {
+        if liveCaptionIsRecording {
+            cancelLiveCaptionRecording()
+        }
+        page = .sync
+        buildSidebar()
+        render()
+    }
+
+    private static func isDictationStatusMessage(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.hasPrefix("listening")
+            || lower.hasPrefix("recording")
+            || lower.hasPrefix("transcribing")
+            || lower.contains("whisper final transcription is still recording")
+            || lower.contains("sherpa live")
     }
 
     @objc private func nextSyncPhrase() {
@@ -2910,15 +3593,21 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
     @objc private func runAgentTest(_ sender: NSButton) {
         switch sender.identifier?.rawValue {
         case "make-note":
-            executeAgentCommand("Hey PadKey, make a note PadKey test successful")
+            executeAgentCommand("Make a note PadKey test successful")
         case "open-facetime":
-            executeAgentCommand("Hey PadKey, open FaceTime")
+            executeAgentCommand("Open FaceTime")
         case "fill-search":
-            executeAgentCommand("Hey PadKey, fill the search field with assistive speech devices")
+            executeAgentCommand("Fill the search field with assistive speech devices")
         case "click-current":
-            executeAgentCommand("Hey PadKey, click the current field")
+            executeAgentCommand("Click the current field")
+        case "computer-runtime":
+            executeAgentCommand("Find the second option in whatever app is open and choose it")
         case "accessibility-tree":
             commandCoordinator.inspectAccessibility(application: AppDelegate.shared?.preferredMacCommandApplication()) { _ in }
+        case "local-chat":
+            executeAgentCommand("Tell me about why punctuation cleanup matters for voice control")
+        case "diagram-note":
+            executeAgentCommand("Make a diagram of PadKey voice control")
         default:
             break
         }
@@ -2961,7 +3650,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
     }
 
     @objc private func inputSourceDidChange() {
-        guard page == .signalMonitor || page == .agent || page == .pipeline else { return }
+        guard page == .signalMonitor || page == .agent || page == .pipeline || page == .liveCaptions else { return }
         DispatchQueue.main.async { [weak self] in self?.render() }
     }
 

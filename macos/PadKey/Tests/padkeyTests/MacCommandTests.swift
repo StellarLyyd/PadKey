@@ -4,40 +4,70 @@ import XCTest
 final class MacCommandTests: XCTestCase {
     func testDeterministicCommandParsing() {
         XCTAssertEqual(
-            MacCommandParser.parse("Hey PadKey, make a note about the BLE test"),
+            MacCommandParser.parse("Make a note about the BLE test"),
             .makeNote("about the BLE test")
         )
-        XCTAssertEqual(MacCommandParser.parse("Hey PadKey, open FaceTime"), .openFaceTime)
+        XCTAssertEqual(MacCommandParser.parse("Make new note"), .newNote)
+        XCTAssertEqual(MacCommandParser.parse("Create a new note"), .newNote)
+        XCTAssertEqual(MacCommandParser.parse("Open FaceTime"), .openFaceTime)
         XCTAssertEqual(
-            MacCommandParser.parse("Hey PadKey, call Chukwudi on FaceTime"),
+            MacCommandParser.parse("Call Chukwudi on FaceTime"),
             .faceTimeContact("Chukwudi")
         )
         XCTAssertEqual(
-            MacCommandParser.parse("Hey PadKey, fill the name field with Chukwudi"),
+            MacCommandParser.parse("Fill the name field with Chukwudi"),
             .genericUI(.fill(target: "name field", value: "Chukwudi"))
         )
         XCTAssertEqual(
-            MacCommandParser.parse("Hey PadKey, type hello into the message field"),
+            MacCommandParser.parse("Type hello into the message field"),
             .genericUI(.fill(target: "message field", value: "hello"))
         )
         XCTAssertEqual(
-            MacCommandParser.parse("Hey PadKey, click the continue button"),
+            MacCommandParser.parse("Click the continue button"),
             .genericUI(.click(target: "continue button"))
+        )
+        XCTAssertEqual(
+            MacCommandParser.parse("Find the second option in whatever app is open and choose it"),
+            .computerControl("Find the second option in whatever app is open and choose it")
+        )
+        XCTAssertEqual(
+            MacCommandParser.parse("Choose the second option in this app"),
+            .computerControl("Choose the second option in this app")
+        )
+        XCTAssertEqual(
+            MacCommandParser.parse("Tell me about local speech recognition"),
+            .conversation("local speech recognition")
+        )
+        XCTAssertEqual(
+            MacCommandParser.parse("PadKey what should I test next"),
+            .conversation("what should I test next")
+        )
+        XCTAssertEqual(
+            MacCommandParser.parse("Make a diagram of the PadKey voice pipeline"),
+            .diagram("the PadKey voice pipeline")
         )
     }
 
     func testOrdinaryDictationIsNotIntercepted() {
         XCTAssertFalse(MacCommandParser.looksLikeVoiceCommand("This is an ordinary paragraph for my document."))
-        XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Hey PadKey, open Notes"))
+        XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Open Notes"))
+        XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Make new note"))
         XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Open Safari"))
         XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Open app Safari"))
         XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Scroll down"))
         XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Paste that"))
         XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Confirm"))
+        XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Find the second option in whatever app is open and choose it"))
+        XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("New chat in this app"))
+        XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Choose the second option in this app"))
+        XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Tell me about accents and punctuation"))
+        XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Make a diagram of PadKey voice control"))
     }
 
     func testHoldToTalkDirectCommandParsing() {
         XCTAssertEqual(MacCommandParser.parse("Open app Safari"), .openApplication("Safari"))
+        XCTAssertEqual(MacCommandParser.parse("Launch Chrome"), .openApplication("Chrome"))
+        XCTAssertEqual(MacCommandParser.parse("Switch to Google Chrome"), .openApplication("Google Chrome"))
         XCTAssertEqual(MacCommandParser.parse("Open the app FaceTime"), .openFaceTime)
         XCTAssertEqual(MacCommandParser.parse("Copy that"), .copy)
         XCTAssertEqual(MacCommandParser.parse("Paste that"), .paste)

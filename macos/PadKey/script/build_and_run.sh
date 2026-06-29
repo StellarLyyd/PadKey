@@ -241,6 +241,9 @@ case "$MODE" in
   --settings|settings)
     open_app_with_args --show-settings
     ;;
+  --agent|agent)
+    open_app_with_args --show-agent
+    ;;
   --scratchpad|scratchpad)
     open_app_with_args --show-scratchpad
     ;;
@@ -248,7 +251,7 @@ case "$MODE" in
     open_app_with_args --insertion-self-test
     ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--hub|--settings|--scratchpad|--insertion-self-test]" >&2
+    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--hub|--settings|--agent|--scratchpad|--insertion-self-test]" >&2
     exit 2
     ;;
 esac

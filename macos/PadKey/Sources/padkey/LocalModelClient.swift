@@ -36,7 +36,7 @@ final class LocalModelClient {
     }
 
     private let endpoint: URL
-    private let model: String
+    private let modelCandidates: [String]
     private let session: URLSession
 
     init(
@@ -47,9 +47,15 @@ final class LocalModelClient {
         self.endpoint = endpoint
             ?? environment["PADKEY_OLLAMA_ENDPOINT"].flatMap(URL.init(string:))
             ?? URL(string: "http://127.0.0.1:11434/api/chat")!
-        self.model = model
+        let primaryModel = model
             ?? environment["PADKEY_OLLAMA_MODEL"]
-            ?? "qwen2.5:7b"
+            ?? "qwen3:4b"
+        let fallbackModels = environment["PADKEY_OLLAMA_FALLBACK_MODELS"]?
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            ?? ["qwen3:4b", "qwen2.5:7b", "qwen2.5-coder:7b", "gemma4:12b-mlx"]
+        self.modelCandidates = Self.uniqueModels([primaryModel] + fallbackModels)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 14
         configuration.timeoutIntervalForResource = 18
@@ -61,20 +67,40 @@ final class LocalModelClient {
         system: String,
         user: String,
         requireJSON: Bool,
+        temperature: Double = 0.0,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
+        sendChat(
+            modelIndex: 0,
+            system: system,
+            user: user,
+            requireJSON: requireJSON,
+            temperature: temperature,
+            completion: completion
+        )
+    }
+
+    private func sendChat(
+        modelIndex: Int,
+        system: String,
+        user: String,
+        requireJSON: Bool,
+        temperature: Double,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        let selectedModel = modelCandidates[min(modelIndex, modelCandidates.count - 1)]
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body = OllamaRequest(
-            model: model,
+            model: selectedModel,
             messages: [
                 OllamaMessage(role: "system", content: system),
                 OllamaMessage(role: "user", content: user)
             ],
             stream: false,
             format: requireJSON ? "json" : nil,
-            options: ["temperature": 0.0]
+            options: ["temperature": temperature]
         )
         do {
             request.httpBody = try JSONEncoder().encode(body)
@@ -99,7 +125,22 @@ final class LocalModelClient {
                 return
             }
             guard (200..<300).contains(http.statusCode), let data else {
-                completion(.failure(LocalModelError.server("Local model returned HTTP \(http.statusCode).")))
+                let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                if self.shouldTryFallback(statusCode: http.statusCode, body: body),
+                   modelIndex + 1 < self.modelCandidates.count
+                {
+                    self.sendChat(
+                        modelIndex: modelIndex + 1,
+                        system: system,
+                        user: user,
+                        requireJSON: requireJSON,
+                        temperature: temperature,
+                        completion: completion
+                    )
+                    return
+                }
+                let message = body.isEmpty ? "Local model returned HTTP \(http.statusCode)." : body
+                completion(.failure(LocalModelError.server(message)))
                 return
             }
             guard let decoded = try? JSONDecoder().decode(OllamaResponse.self, from: data) else {
@@ -108,5 +149,20 @@ final class LocalModelClient {
             }
             completion(.success(decoded.message.content))
         }.resume()
+    }
+
+    private func shouldTryFallback(statusCode: Int, body: String) -> Bool {
+        statusCode == 404
+            || body.localizedCaseInsensitiveContains("not found")
+            || body.localizedCaseInsensitiveContains("pull model")
+    }
+
+    private static func uniqueModels(_ models: [String]) -> [String] {
+        var seen: Set<String> = []
+        return models.filter { model in
+            guard !seen.contains(model) else { return false }
+            seen.insert(model)
+            return true
+        }
     }
 }
