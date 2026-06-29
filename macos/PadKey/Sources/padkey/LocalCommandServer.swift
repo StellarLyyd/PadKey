@@ -22,6 +22,10 @@ final class LocalCommandServer {
         let nodes: [AccessibilityNode]
     }
 
+    private struct AppStateResponse: Codable {
+        let snapshot: AppStateSnapshot
+    }
+
     // PadKey owns a separate loopback endpoint so it can coexist with the
     // standalone OwoFlow agent on 8788.
     static let defaultPort: UInt16 = 8789
@@ -164,6 +168,22 @@ final class LocalCommandServer {
                     self.sendError(connection, status: 403, code: "ACCESSIBILITY_REQUIRED", message: "Enable Accessibility for the packaged PadKey app.", origin: request.headers["origin"])
                 } catch {
                     self.sendError(connection, status: 422, code: "INSPECTION_FAILED", message: error.localizedDescription, origin: request.headers["origin"])
+                }
+            }
+
+        case ("GET", "/app-state"):
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                do {
+                    let preferred = AppDelegate.shared?.preferredMacCommandApplication()
+                    let app = try self.accessibility.frontmostApp(preferred: preferred)
+                    let nodes = try self.accessibility.getAccessibilityTree(for: preferred, maximumNodes: 500)
+                    let snapshot = AppStateSnapshotBuilder.snapshot(app: app, nodes: nodes)
+                    self.sendJSON(connection, status: 200, value: AppStateResponse(snapshot: snapshot), origin: request.headers["origin"])
+                } catch AccessibilityTreeError.permissionRequired {
+                    self.sendError(connection, status: 403, code: "ACCESSIBILITY_REQUIRED", message: "Enable Accessibility for the packaged PadKey app.", origin: request.headers["origin"])
+                } catch {
+                    self.sendError(connection, status: 422, code: "APP_STATE_FAILED", message: error.localizedDescription, origin: request.headers["origin"])
                 }
             }
 

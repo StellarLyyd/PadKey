@@ -754,7 +754,8 @@ final class MacCommandCoordinator {
                 spoken = "Selected \(option)."
                 result = "Option selected"
             }
-            return success(intent: "ui_action", spoken: spoken, actions: [actionRecord], frontmostApp: app.name, target: actionRecord.target, result: result)
+            let observation = postActionObservation(app: app, actionCount: 1)
+            return success(intent: "ui_action", spoken: spoken, actions: [actionRecord], frontmostApp: app.name, target: actionRecord.target, result: "\(result). \(observation)")
         } catch {
             return toolFailure(intent: "ui_action", error: error, app: app.name)
         }
@@ -854,11 +855,33 @@ final class MacCommandCoordinator {
                 actions: records,
                 frontmostApp: app.name,
                 target: records.last?.target,
-                result: "Completed \(records.count) accessibility action\(records.count == 1 ? "" : "s")"
+                result: postActionObservation(app: app, actionCount: records.count)
             )
         } catch {
             return toolFailure(intent: "ui_action", error: error, app: app.name)
         }
+    }
+
+    private func postActionObservation(app: FrontmostAppInfo, actionCount: Int) -> String {
+        let completed = "Completed \(actionCount) accessibility action\(actionCount == 1 ? "" : "s")"
+        guard
+            let runningApp = NSRunningApplication(processIdentifier: app.processIdentifier),
+            let nodes = try? accessibility.getAccessibilityTree(for: runningApp, maximumNodes: 240)
+        else {
+            return "\(completed). Re-observation unavailable."
+        }
+
+        let snapshot = AppStateSnapshotBuilder.snapshot(app: app, nodes: nodes, maxElements: 12)
+        let focused = snapshot.focusedElement.map { "\($0.name) \($0.ref)" } ?? "none"
+        let roleSummary = snapshot.roleCounts
+            .sorted { lhs, rhs in
+                if lhs.value != rhs.value { return lhs.value > rhs.value }
+                return lhs.key < rhs.key
+            }
+            .prefix(4)
+            .map { "\($0.key): \($0.value)" }
+            .joined(separator: ", ")
+        return "\(completed). Re-observed \(snapshot.totalNodes) controls; focused: \(focused); roles: \(roleSummary.isEmpty ? "none" : roleSummary)."
     }
 
     private func plannedTargetSummary(_ plan: AppActionPlan, nodes: [AccessibilityNode]) -> String? {

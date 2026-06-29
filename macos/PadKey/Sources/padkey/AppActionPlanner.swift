@@ -42,6 +42,7 @@ final class AppActionPlanner {
         completion: @escaping (Result<AppActionPlan, Error>) -> Void
     ) {
         let limitedNodes = Array(nodes.prefix(180))
+        let snapshot = AppStateSnapshotBuilder.snapshot(app: frontmostApp, nodes: limitedNodes)
         guard let treeData = try? JSONEncoder().encode(limitedNodes),
               let treeJSON = String(data: treeData, encoding: .utf8)
         else {
@@ -52,8 +53,9 @@ final class AppActionPlanner {
         let system = """
         You are PadKey's local macOS accessibility action planner.
         You are running inside the Computer Atlas runtime for the user's current app.
-        Return strict JSON only. Never invent coordinates or node IDs. Use only nodes supplied by the user.
-        Resolve live-app instructions such as "choose the second option" or "click the visible continue button" using the supplied accessibility nodes.
+        Return strict JSON only. Never invent coordinates, refs, or node IDs. Use only nodes supplied by the user.
+        Resolve live-app instructions such as "choose the second option" or "click the visible continue button" using the supplied app-state summary first, then verify against the full accessibility nodes.
+        The app-state summary uses compact refs like @e12, but executable actions must use the matching nodeId value.
         Allowed tools: focus_element, click_element, set_element_value, select_option.
         Never choose a tool that sends a message, starts a call, submits a form, purchases, deletes, uploads, posts publicly, runs shell commands, or exposes private data.
         If more than one element plausibly matches, return type clarification with no actions and short options.
@@ -62,6 +64,9 @@ final class AppActionPlanner {
         let user = """
         Transcript: \(transcript)
         Frontmost app: \(frontmostApp.name)
+        App-state summary:
+        \(snapshot.compactDescription)
+
         Accessibility tree: \(treeJSON)
         """
 

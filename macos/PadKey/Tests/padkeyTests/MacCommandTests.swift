@@ -120,20 +120,41 @@ final class MacCommandTests: XCTestCase {
         XCTAssertEqual(plan.actions.first?.args.nodeId, "node_12")
     }
 
-    private func node(id: String, role: String, label: String) -> AccessibilityNode {
+    func testAppStateSnapshotIncludesRefsAndRedactsSecrets() {
+        let app = FrontmostAppInfo(name: "Test App", bundleIdentifier: "com.example.test", processIdentifier: 123)
+        let search = node(id: "node_1", role: "AXTextField", label: "Search", value: "assistive speech", focused: true)
+        let password = node(id: "node_2", role: "AXTextField", label: "Password", value: "hunter2", focused: false)
+        let button = node(id: "node_3", role: "AXButton", label: "Continue", value: nil, focused: false, actions: ["AXPress"])
+
+        let snapshot = AppStateSnapshotBuilder.snapshot(app: app, nodes: [search, password, button])
+
+        XCTAssertEqual(snapshot.focusedElement?.ref, "@e1")
+        XCTAssertTrue(snapshot.actionableElements.contains { $0.ref == "@e3" && $0.nodeId == "node_3" })
+        XCTAssertEqual(snapshot.actionableElements.first(where: { $0.nodeId == "node_2" })?.value, "[redacted]")
+        XCTAssertTrue(snapshot.compactDescription.contains("nodeId=node_3"))
+    }
+
+    private func node(
+        id: String,
+        role: String,
+        label: String,
+        value: String? = nil,
+        focused: Bool = false,
+        actions: [String] = []
+    ) -> AccessibilityNode {
         AccessibilityNode(
             id: id,
             role: role,
             title: nil,
             label: label,
-            value: nil,
+            value: value,
             placeholder: nil,
             description: nil,
             help: nil,
             enabled: true,
-            focused: false,
+            focused: focused,
             bounds: nil,
-            actions: []
+            actions: actions
         )
     }
 }

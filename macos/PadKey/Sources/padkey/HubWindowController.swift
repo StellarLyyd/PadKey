@@ -956,6 +956,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         let actions: [(String, String, String, String)] = [
             ("App launch and focus", "Open Safari / Open FaceTime / Open Notes", "LaunchServices and deterministic app tools", "Live"),
             ("Frontmost-app UI", "Choose the second option in this app", "Accessibility tree plus local action planner", PermissionHelper.isAccessibilityTrusted ? "Live" : "Needs Accessibility"),
+            ("App-state inspection", "What controls are on screen?", "Compact @e refs, focused control, role counts, readable preview", PermissionHelper.isAccessibilityTrusted ? "Live" : "Needs Accessibility"),
             ("Fields and controls", "Fill the search field / click Continue / select PDF", "Direct AX match first, local planner fallback", PermissionHelper.isAccessibilityTrusted ? "Live" : "Needs Accessibility"),
             ("Writing surfaces", "Make a note / append to current note / paste that", "AppleScript, text insertion, clipboard actions", "Live"),
             ("Navigation", "Scroll down / go back / close window", "Keyboard and scroll adapters", "Live"),
@@ -1300,6 +1301,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         rows.addArrangedSubview(settingsDetailRow("Transcription", "\(store.pipelineSettings.effectiveRecognitionEngine.displayName); \(syncDictationController.liveTranscriptionStatus)"))
         rows.addArrangedSubview(settingsDetailRow("Cleanup", "Spoken punctuation, filler-word handling, sentence casing, personal dictionary, snippets."))
         rows.addArrangedSubview(settingsDetailRow("Conversation", "Local Ollama chat for explain, tell me about, chat about, and PadKey-prefixed questions."))
+        rows.addArrangedSubview(settingsDetailRow("App state", "Compact /app-state snapshot with @e refs, focused control, role counts, and readable preview."))
         rows.addArrangedSubview(settingsDetailRow("Diagrams", "Voice requests create Mermaid diagram notes through the local model and Apple Notes."))
         rows.addArrangedSubview(settingsDetailRow("Voice feedback", "macOS NSSpeechSynthesizer speaks command results and local answers. Cloud voice APIs are not required."))
 
