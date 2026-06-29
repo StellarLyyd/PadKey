@@ -609,12 +609,14 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         contentStack.addArrangedSubview(settingsSummaryStrip())
         contentStack.addArrangedSubview(inputSourcePanel())
         contentStack.addArrangedSubview(permissionStatusTable())
+        contentStack.addArrangedSubview(accessModePanel())
         contentStack.addArrangedSubview(settingsBlock())
     }
 
     private func renderAgentControl() {
         contentStack.addArrangedSubview(agentRuntimeHeader())
         contentStack.addArrangedSubview(agentCapabilityStrip())
+        contentStack.addArrangedSubview(accessModePanel())
         contentStack.addArrangedSubview(agentRealtimeStackPanel())
         contentStack.addArrangedSubview(agentCommandComposer())
         contentStack.addArrangedSubview(sectionLabel("LIVE RUNTIME"))
@@ -1194,6 +1196,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
     }
 
     private func agentCapabilityStrip() -> NSView {
+        let accessMode = store.pipelineSettings.effectiveAccessMode
         let row = NSStackView()
         row.orientation = .horizontal
         row.spacing = 10
@@ -1225,12 +1228,34 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
             accent: PermissionHelper.isAccessibilityTrusted ? PadKeyTheme.teal : PadKeyTheme.amber
         ))
         row.addArrangedSubview(agentCapabilityTile(
-            value: "Guarded",
-            label: "Risk gate",
-            detail: "Sends, calls, deletes pause for confirm",
-            accent: PadKeyTheme.amber
+            value: accessMode.shortTitle,
+            label: "Access",
+            detail: accessModeTileDetail(accessMode),
+            accent: accessModeAccent(accessMode)
         ))
         return row
+    }
+
+    private func accessModeTileDetail(_ mode: PadKeyAccessMode) -> String {
+        switch mode {
+        case .askForApproval:
+            return "Confirms app control, web, and writes"
+        case .approveForMe:
+            return "Confirms unsafe or sensitive actions"
+        case .fullAccess:
+            return "Ordinary actions run; hard stops remain"
+        }
+    }
+
+    private func accessModeAccent(_ mode: PadKeyAccessMode) -> NSColor {
+        switch mode {
+        case .askForApproval:
+            return PadKeyTheme.amber
+        case .approveForMe:
+            return PadKeyTheme.teal
+        case .fullAccess:
+            return PadKeyTheme.purple
+        }
     }
 
     private func agentCapabilityTile(value: String, label: String, detail: String, accent: NSColor) -> NSView {
@@ -1302,6 +1327,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         rows.addArrangedSubview(settingsDetailRow("Cleanup", "Spoken punctuation, filler-word handling, sentence casing, personal dictionary, snippets."))
         rows.addArrangedSubview(settingsDetailRow("Conversation", "Local Ollama chat for explain, tell me about, chat about, and PadKey-prefixed questions."))
         rows.addArrangedSubview(settingsDetailRow("App state", "Compact /app-state snapshot with @e refs, focused control, role counts, and readable preview."))
+        rows.addArrangedSubview(settingsDetailRow("Approval", "\(store.pipelineSettings.effectiveAccessMode.title): \(store.pipelineSettings.effectiveAccessMode.detail)"))
         rows.addArrangedSubview(settingsDetailRow("Diagrams", "Voice requests create Mermaid diagram notes through the local model and Apple Notes."))
         rows.addArrangedSubview(settingsDetailRow("Voice feedback", "macOS NSSpeechSynthesizer speaks command results and local answers. Cloud voice APIs are not required."))
 
@@ -2661,6 +2687,104 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         return row
     }
 
+    private func accessModePanel() -> NSView {
+        let selectedMode = store.pipelineSettings.effectiveAccessMode
+        let panel = RoundedView(
+            fillColor: PadKeyTheme.panelBackground,
+            radius: 12,
+            strokeColor: NSColor.separatorColor.withAlphaComponent(0.42),
+            strokeWidth: 1
+        )
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        panel.heightAnchor.constraint(greaterThanOrEqualToConstant: 230).isActive = true
+
+        let title = NSTextField(labelWithString: "Agent approval")
+        title.font = .systemFont(ofSize: 15, weight: .bold)
+        title.textColor = PadKeyTheme.ink
+
+        let detail = NSTextField(wrappingLabelWithString: "Choose how much PadKey can do after it hears a command. macOS privacy permissions still apply; this layer decides when PadKey pauses before acting.")
+        detail.font = .systemFont(ofSize: 12, weight: .medium)
+        detail.textColor = PadKeyTheme.secondaryInk
+        detail.maximumNumberOfLines = 2
+
+        let options = NSStackView()
+        options.orientation = .horizontal
+        options.spacing = 10
+        options.alignment = .top
+        PadKeyAccessMode.allCases.forEach { mode in
+            options.addArrangedSubview(accessModeOptionTile(mode, selected: mode == selectedMode))
+        }
+
+        [title, detail, options].forEach {
+            panel.addSubview($0)
+            $0.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        NSLayoutConstraint.activate([
+            title.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 20),
+            title.topAnchor.constraint(equalTo: panel.topAnchor, constant: 18),
+            detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            detail.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -20),
+            detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 7),
+            options.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            options.trailingAnchor.constraint(lessThanOrEqualTo: detail.trailingAnchor),
+            options.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 16),
+            options.bottomAnchor.constraint(lessThanOrEqualTo: panel.bottomAnchor, constant: -18)
+        ])
+
+        return panel
+    }
+
+    private func accessModeOptionTile(_ mode: PadKeyAccessMode, selected: Bool) -> NSView {
+        let accent = accessModeAccent(mode)
+        let tile = RoundedView(
+            fillColor: selected ? accent.withAlphaComponent(0.12) : PadKeyTheme.softSurface.withAlphaComponent(0.64),
+            radius: 10,
+            strokeColor: selected ? accent : NSColor.separatorColor.withAlphaComponent(0.30),
+            strokeWidth: selected ? 1.4 : 1
+        )
+        tile.translatesAutoresizingMaskIntoConstraints = false
+        tile.widthAnchor.constraint(equalToConstant: 228).isActive = true
+        tile.heightAnchor.constraint(greaterThanOrEqualToConstant: 126).isActive = true
+
+        let title = NSTextField(labelWithString: mode.title)
+        title.font = .systemFont(ofSize: 14, weight: .bold)
+        title.textColor = PadKeyTheme.ink
+
+        let detail = NSTextField(wrappingLabelWithString: mode.detail)
+        detail.font = .systemFont(ofSize: 11, weight: .medium)
+        detail.textColor = PadKeyTheme.secondaryInk
+        detail.maximumNumberOfLines = 4
+
+        let button = pipelineOptionButton(
+            title: selected ? "Selected" : "Use",
+            identifier: "access-\(mode.rawValue)",
+            selected: selected,
+            action: #selector(setAccessMode(_:))
+        )
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 82).isActive = true
+
+        [title, detail, button].forEach {
+            tile.addSubview($0)
+            $0.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        NSLayoutConstraint.activate([
+            title.leadingAnchor.constraint(equalTo: tile.leadingAnchor, constant: 14),
+            title.topAnchor.constraint(equalTo: tile.topAnchor, constant: 13),
+            title.trailingAnchor.constraint(equalTo: tile.trailingAnchor, constant: -14),
+            detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            detail.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+            detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 7),
+            button.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            button.topAnchor.constraint(greaterThanOrEqualTo: detail.bottomAnchor, constant: 10),
+            button.bottomAnchor.constraint(equalTo: tile.bottomAnchor, constant: -13)
+        ])
+
+        return tile
+    }
+
     private func settingsBlock() -> NSView {
         let grid = NSStackView()
         grid.orientation = .vertical
@@ -3580,6 +3704,19 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         }
 
         store.updatePipelineSettings { $0.recognitionEngine = engine }
+        render()
+    }
+
+    @objc private func setAccessMode(_ sender: NSButton) {
+        guard
+            let raw = sender.identifier?.rawValue.replacingOccurrences(of: "access-", with: ""),
+            let mode = PadKeyAccessMode(rawValue: raw)
+        else {
+            return
+        }
+
+        store.updatePipelineSettings { $0.accessMode = mode }
+        commandCoordinator.refreshPermissionState()
         render()
     }
 

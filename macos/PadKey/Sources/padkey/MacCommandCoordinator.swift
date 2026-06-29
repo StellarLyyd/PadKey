@@ -194,15 +194,49 @@ enum MacCommandParser {
     }
 }
 
+enum MacActionApprovalScope {
+    case readOnly
+    case externalApp
+    case externalWrite
+    case internet
+    case communication
+}
+
 enum MacActionSafetyPolicy {
-    private static let confirmationKeywords = [
-        "send", "submit", "call", "purchase", "buy", "pay", "delete", "remove",
-        "email", "message", "upload", "share", "post", "publish", "terminal", "run command"
+    private static let hardConfirmationKeywords = [
+        "send", "submit", "call", "purchase", "buy", "pay", "payment",
+        "delete", "remove", "erase", "trash", "email", "message", "upload", "share",
+        "post", "publish", "subscribe", "unsubscribe", "password", "api key", "secret",
+        "captcha", "install", "extension", "terminal", "run command", "shell", "security",
+        "privacy", "medical", "patient", "bank", "credit card"
     ]
 
-    static func requiresConfirmation(command: String, target: String? = nil) -> Bool {
+    private static let guidedConfirmationKeywords = hardConfirmationKeywords + [
+        "checkout", "sign in", "login", "log in", "account", "permission", "allow",
+        "authorize", "grant", "external file", "downloads", "documents folder"
+    ]
+
+    static func requiresConfirmation(
+        command: String,
+        target: String? = nil,
+        mode: PadKeyAccessMode = .approveForMe,
+        scope: MacActionApprovalScope = .externalApp
+    ) -> Bool {
+        guard scope != .readOnly else { return false }
+
         let combined = "\(command) \(target ?? "")".lowercased()
-        return confirmationKeywords.contains { combined.contains($0) }
+        let hardStop = hardConfirmationKeywords.contains { combined.contains($0) }
+            || scope == .communication
+        if hardStop { return true }
+
+        switch mode {
+        case .askForApproval:
+            return true
+        case .approveForMe:
+            return guidedConfirmationKeywords.contains { combined.contains($0) }
+        case .fullAccess:
+            return false
+        }
     }
 }
 
@@ -220,6 +254,10 @@ final class MacCommandCoordinator {
     private let speech = NSSpeechSynthesizer()
     private var pendingConfirmations: [String: PendingConfirmation] = [:]
     private(set) var snapshot = AgentControlSnapshot.idle
+
+    private var accessMode: PadKeyAccessMode {
+        PadKeyStore.shared.pipelineSettings.effectiveAccessMode
+    }
 
     private init() {
         refreshPermissionState()
@@ -255,6 +293,45 @@ final class MacCommandCoordinator {
         publishSnapshot()
     }
 
+    @discardableResult
+    private func pauseForAccessApprovalIfNeeded(
+        intent: String,
+        command: String,
+        spokenAction: String,
+        appName: String?,
+        target: String?,
+        scope: MacActionApprovalScope,
+        actions: [MacCommandActionRecord] = [],
+        completion: @escaping (MacCommandResponse) -> Void,
+        execute: @escaping () -> MacCommandResponse
+    ) -> Bool {
+        let mode = accessMode
+        guard MacActionSafetyPolicy.requiresConfirmation(command: command, target: target ?? appName, mode: mode, scope: scope) else {
+            return false
+        }
+
+        let confirmation = makeConfirmation { confirmed in
+            confirmed(execute())
+        }
+        let response = MacCommandResponse(
+            ok: true,
+            intent: "\(intent)_confirmation",
+            spoken: "\(mode.title) is on. Confirm before I \(spokenAction).",
+            actions: actions,
+            frontmostApp: appName,
+            selectedTarget: target,
+            actionResult: "Paused by \(mode.title) approval layer",
+            clarification: nil,
+            options: nil,
+            confirmationRequired: true,
+            confirmationId: confirmation.id,
+            permissionRequired: nil,
+            message: "Access mode: \(mode.title). \(mode.detail)"
+        )
+        finish(response, command: command, completion: completion)
+        return true
+    }
+
     func execute(
         request: MacCommandRequest,
         preferredApplication: NSRunningApplication? = nil,
@@ -288,64 +365,57 @@ final class MacCommandCoordinator {
             }
 
         case .newNote:
-            do {
-                try NotesTool.newNote()
-                finish(success(
-                    intent: "new_note",
-                    spoken: "New note created.",
-                    actions: [MacCommandActionRecord(type: "new_note", appName: "Notes", nodeId: nil, target: "Blank note", text: nil)],
-                    frontmostApp: "Notes",
-                    target: "Blank note",
-                    result: "Created a blank note in Apple Notes"
-                ), command: transcript, completion: completion)
-            } catch {
-                finish(toolFailure(intent: "new_note", error: error, app: "Notes"), command: transcript, completion: completion)
-            }
+            if pauseForAccessApprovalIfNeeded(
+                intent: "new_note",
+                command: transcript,
+                spokenAction: "create a blank note in Apple Notes",
+                appName: "Notes",
+                target: "Blank note",
+                scope: .externalWrite,
+                completion: completion,
+                execute: { [weak self] in self?.performNewNote() ?? .failure(spoken: "PadKey could not continue that note action.") }
+            ) { return }
+            finish(performNewNote(), command: transcript, completion: completion)
 
         case .makeNote(let content):
-            do {
-                try NotesTool.makeNote(content: content)
-                finish(success(
-                    intent: "make_note",
-                    spoken: "Note created.",
-                    actions: [MacCommandActionRecord(type: "make_note", appName: "Notes", nodeId: nil, target: "New note", text: content)],
-                    frontmostApp: "Notes",
-                    target: "New note",
-                    result: "Created a note in Apple Notes"
-                ), command: transcript, completion: completion)
-            } catch {
-                finish(toolFailure(intent: "make_note", error: error, app: "Notes"), command: transcript, completion: completion)
-            }
+            if pauseForAccessApprovalIfNeeded(
+                intent: "make_note",
+                command: transcript,
+                spokenAction: "create a note in Apple Notes",
+                appName: "Notes",
+                target: "New note",
+                scope: .externalWrite,
+                completion: completion,
+                execute: { [weak self] in self?.performMakeNote(content: content) ?? .failure(spoken: "PadKey could not continue that note action.") }
+            ) { return }
+            finish(performMakeNote(content: content), command: transcript, completion: completion)
 
         case .appendNote(let content):
-            do {
-                try NotesTool.appendToCurrentNote(content)
-                finish(success(
-                    intent: "append_note",
-                    spoken: "Note updated.",
-                    actions: [MacCommandActionRecord(type: "append_note", appName: "Notes", nodeId: nil, target: "Selected note", text: content)],
-                    frontmostApp: "Notes",
-                    target: "Selected note",
-                    result: "Appended text to the selected note"
-                ), command: transcript, completion: completion)
-            } catch {
-                finish(toolFailure(intent: "append_note", error: error, app: "Notes"), command: transcript, completion: completion)
-            }
+            if pauseForAccessApprovalIfNeeded(
+                intent: "append_note",
+                command: transcript,
+                spokenAction: "append text to the selected Apple Note",
+                appName: "Notes",
+                target: "Selected note",
+                scope: .externalWrite,
+                completion: completion,
+                execute: { [weak self] in self?.performAppendNote(content: content) ?? .failure(spoken: "PadKey could not continue that note action.") }
+            ) { return }
+            finish(performAppendNote(content: content), command: transcript, completion: completion)
 
         case .openFaceTime:
-            do {
-                try FaceTimeTool.openFaceTime()
-                finish(success(
-                    intent: "open_facetime",
-                    spoken: "Opening FaceTime.",
-                    actions: [MacCommandActionRecord(type: "open_app", appName: "FaceTime", nodeId: nil, target: nil, text: nil)],
-                    frontmostApp: "FaceTime",
-                    target: nil,
-                    result: "FaceTime opened"
-                ), command: transcript, completion: completion)
-            } catch {
-                finish(toolFailure(intent: "open_facetime", error: error, app: "FaceTime"), command: transcript, completion: completion)
-            }
+            if pauseForAccessApprovalIfNeeded(
+                intent: "open_facetime",
+                command: transcript,
+                spokenAction: "open FaceTime",
+                appName: "FaceTime",
+                target: nil,
+                scope: .externalApp,
+                actions: [MacCommandActionRecord(type: "open_app", appName: "FaceTime", nodeId: nil, target: nil, text: nil)],
+                completion: completion,
+                execute: { [weak self] in self?.performOpenFaceTime() ?? .failure(spoken: "PadKey could not continue that app action.") }
+            ) { return }
+            finish(performOpenFaceTime(), command: transcript, completion: completion)
 
         case .faceTimeContact(let contact):
             do {
@@ -404,15 +474,18 @@ final class MacCommandCoordinator {
         case .openApplication(let appName):
             do {
                 let app = try UIAutomation.resolveApplication(named: appName)
-                try UIAutomation.openApplication(named: app.displayName)
-                finish(success(
+                if pauseForAccessApprovalIfNeeded(
                     intent: "open_app",
-                    spoken: "Opening \(app.displayName).",
+                    command: transcript,
+                    spokenAction: "open \(app.displayName)",
+                    appName: app.displayName,
+                    target: app.displayName,
+                    scope: .externalApp,
                     actions: [MacCommandActionRecord(type: "open_app", appName: app.displayName, nodeId: nil, target: nil, text: nil)],
-                    frontmostApp: app.displayName,
-                    target: nil,
-                    result: "\(app.displayName) opened"
-                ), command: transcript, completion: completion)
+                    completion: completion,
+                    execute: { [weak self] in self?.performOpenApplication(app) ?? .failure(spoken: "PadKey could not continue that app action.") }
+                ) { return }
+                finish(performOpenApplication(app), command: transcript, completion: completion)
             } catch UIAutomationError.ambiguousApp(_, let options) {
                 finish(clarification(
                     spoken: "I found more than one matching app. Which one did you mean?",
@@ -424,19 +497,18 @@ final class MacCommandCoordinator {
             }
 
         case .browserSearch(let query):
-            do {
-                try BrowserTool.searchWeb(query)
-                finish(success(
-                    intent: "browser_search",
-                    spoken: "Searching the web for \(query).",
-                    actions: [MacCommandActionRecord(type: "browser_search", appName: "Browser", nodeId: nil, target: "Search", text: query)],
-                    frontmostApp: preferredApplication?.localizedName,
-                    target: "Browser search",
-                    result: "Opened web search results"
-                ), command: transcript, completion: completion)
-            } catch {
-                finish(toolFailure(intent: "browser_search", error: error, app: preferredApplication?.localizedName), command: transcript, completion: completion)
-            }
+            if pauseForAccessApprovalIfNeeded(
+                intent: "browser_search",
+                command: transcript,
+                spokenAction: "search the web for \(query)",
+                appName: preferredApplication?.localizedName ?? "Browser",
+                target: "Browser search",
+                scope: .internet,
+                actions: [MacCommandActionRecord(type: "browser_search", appName: "Browser", nodeId: nil, target: "Search", text: query)],
+                completion: completion,
+                execute: { [weak self] in self?.performBrowserSearch(query, application: preferredApplication) ?? .failure(spoken: "PadKey could not continue that web action.") }
+            ) { return }
+            finish(performBrowserSearch(query, application: preferredApplication), command: transcript, completion: completion)
 
         case .summarizePage:
             summarizePage(command: transcript, application: preferredApplication, completion: completion)
@@ -510,6 +582,102 @@ final class MacCommandCoordinator {
             finish(response, command: "Inspect accessibility tree", completion: completion)
         } catch {
             finish(toolFailure(intent: "inspect_accessibility", error: error, app: application?.localizedName), command: "Inspect accessibility tree", completion: completion)
+        }
+    }
+
+    private func performNewNote() -> MacCommandResponse {
+        do {
+            try NotesTool.newNote()
+            return success(
+                intent: "new_note",
+                spoken: "New note created.",
+                actions: [MacCommandActionRecord(type: "new_note", appName: "Notes", nodeId: nil, target: "Blank note", text: nil)],
+                frontmostApp: "Notes",
+                target: "Blank note",
+                result: "Created a blank note in Apple Notes"
+            )
+        } catch {
+            return toolFailure(intent: "new_note", error: error, app: "Notes")
+        }
+    }
+
+    private func performMakeNote(content: String) -> MacCommandResponse {
+        do {
+            try NotesTool.makeNote(content: content)
+            return success(
+                intent: "make_note",
+                spoken: "Note created.",
+                actions: [MacCommandActionRecord(type: "make_note", appName: "Notes", nodeId: nil, target: "New note", text: content)],
+                frontmostApp: "Notes",
+                target: "New note",
+                result: "Created a note in Apple Notes"
+            )
+        } catch {
+            return toolFailure(intent: "make_note", error: error, app: "Notes")
+        }
+    }
+
+    private func performAppendNote(content: String) -> MacCommandResponse {
+        do {
+            try NotesTool.appendToCurrentNote(content)
+            return success(
+                intent: "append_note",
+                spoken: "Note updated.",
+                actions: [MacCommandActionRecord(type: "append_note", appName: "Notes", nodeId: nil, target: "Selected note", text: content)],
+                frontmostApp: "Notes",
+                target: "Selected note",
+                result: "Appended text to the selected note"
+            )
+        } catch {
+            return toolFailure(intent: "append_note", error: error, app: "Notes")
+        }
+    }
+
+    private func performOpenFaceTime() -> MacCommandResponse {
+        do {
+            try FaceTimeTool.openFaceTime()
+            return success(
+                intent: "open_facetime",
+                spoken: "Opening FaceTime.",
+                actions: [MacCommandActionRecord(type: "open_app", appName: "FaceTime", nodeId: nil, target: nil, text: nil)],
+                frontmostApp: "FaceTime",
+                target: nil,
+                result: "FaceTime opened"
+            )
+        } catch {
+            return toolFailure(intent: "open_facetime", error: error, app: "FaceTime")
+        }
+    }
+
+    private func performOpenApplication(_ app: UIAutomation.ResolvedApplication) -> MacCommandResponse {
+        do {
+            try UIAutomation.openApplication(named: app.displayName)
+            return success(
+                intent: "open_app",
+                spoken: "Opening \(app.displayName).",
+                actions: [MacCommandActionRecord(type: "open_app", appName: app.displayName, nodeId: nil, target: nil, text: nil)],
+                frontmostApp: app.displayName,
+                target: nil,
+                result: "\(app.displayName) opened"
+            )
+        } catch {
+            return toolFailure(intent: "open_app", error: error, app: app.displayName)
+        }
+    }
+
+    private func performBrowserSearch(_ query: String, application: NSRunningApplication?) -> MacCommandResponse {
+        do {
+            try BrowserTool.searchWeb(query)
+            return success(
+                intent: "browser_search",
+                spoken: "Searching the web for \(query).",
+                actions: [MacCommandActionRecord(type: "browser_search", appName: "Browser", nodeId: nil, target: "Search", text: query)],
+                frontmostApp: application?.localizedName,
+                target: "Browser search",
+                result: "Opened web search results"
+            )
+        } catch {
+            return toolFailure(intent: "browser_search", error: error, app: application?.localizedName)
         }
     }
 
@@ -592,29 +760,27 @@ final class MacCommandCoordinator {
             }
 
             let node = matches[0]
-            if MacActionSafetyPolicy.requiresConfirmation(command: command, target: node.displayName) {
-                let confirmation = makeConfirmation { [weak self] confirmed in
-                    guard let self else { return }
-                    confirmed(self.performGeneric(action, node: node, app: app))
+            let scope: MacActionApprovalScope = {
+                switch action {
+                case .fill, .select:
+                    return .externalWrite
+                case .focus, .click:
+                    return .externalApp
                 }
-                let response = MacCommandResponse(
-                    ok: true,
-                    intent: "ui_action_confirmation",
-                    spoken: "I’m ready to interact with \(node.displayName). Confirm before I continue.",
-                    actions: [],
-                    frontmostApp: app.name,
-                    selectedTarget: node.displayName,
-                    actionResult: "Action paused for confirmation",
-                    clarification: nil,
-                    options: nil,
-                    confirmationRequired: true,
-                    confirmationId: confirmation.id,
-                    permissionRequired: nil,
-                    message: nil
-                )
-                finish(response, command: command, completion: completion)
-                return
-            }
+            }()
+            if pauseForAccessApprovalIfNeeded(
+                intent: "ui_action",
+                command: command,
+                spokenAction: "interact with \(node.displayName)",
+                appName: app.name,
+                target: node.displayName,
+                scope: scope,
+                completion: completion,
+                execute: { [weak self] in
+                    guard let self else { return .failure(spoken: "PadKey could not continue that UI action.") }
+                    return self.performGeneric(action, node: node, app: app)
+                }
+            ) { return }
             finish(performGeneric(action, node: node, app: app), command: command, completion: completion)
         } catch {
             finish(toolFailure(intent: "ui_action", error: error, app: application?.localizedName), command: command, completion: completion)
@@ -681,18 +847,41 @@ final class MacCommandCoordinator {
         application: NSRunningApplication?,
         completion: @escaping (MacCommandResponse) -> Void
     ) {
+        if pauseForAccessApprovalIfNeeded(
+            intent: intent,
+            command: command,
+            spokenAction: "send Command-\(key) to the active app",
+            appName: application?.localizedName,
+            target: "Command-\(key)",
+            scope: .externalApp,
+            actions: [MacCommandActionRecord(type: "keyboard_shortcut", appName: application?.localizedName, nodeId: nil, target: "Command-\(key)", text: nil)],
+            completion: completion,
+            execute: { [weak self] in
+                self?.performKeyboardShortcut(intent: intent, spoken: spoken, key: key, application: application)
+                    ?? .failure(spoken: "PadKey could not continue that keyboard action.")
+            }
+        ) { return }
+        finish(performKeyboardShortcut(intent: intent, spoken: spoken, key: key, application: application), command: command, completion: completion)
+    }
+
+    private func performKeyboardShortcut(
+        intent: String,
+        spoken: String,
+        key: String,
+        application: NSRunningApplication?
+    ) -> MacCommandResponse {
         do {
             try UIAutomation.pressCommandKey(key)
-            finish(success(
+            return success(
                 intent: intent,
                 spoken: spoken,
                 actions: [MacCommandActionRecord(type: "keyboard_shortcut", appName: application?.localizedName, nodeId: nil, target: "Command-\(key)", text: nil)],
                 frontmostApp: application?.localizedName,
                 target: "Command-\(key)",
                 result: spoken
-            ), command: command, completion: completion)
+            )
         } catch {
-            finish(toolFailure(intent: intent, error: error, app: application?.localizedName), command: command, completion: completion)
+            return toolFailure(intent: intent, error: error, app: application?.localizedName)
         }
     }
 
@@ -702,18 +891,39 @@ final class MacCommandCoordinator {
         application: NSRunningApplication?,
         completion: @escaping (MacCommandResponse) -> Void
     ) {
+        if pauseForAccessApprovalIfNeeded(
+            intent: "scroll",
+            command: command,
+            spokenAction: "scroll \(direction) in the active app",
+            appName: application?.localizedName,
+            target: direction,
+            scope: .externalApp,
+            actions: [MacCommandActionRecord(type: "scroll", appName: application?.localizedName, nodeId: nil, target: direction, text: nil)],
+            completion: completion,
+            execute: { [weak self] in
+                self?.performScroll(direction: direction, application: application)
+                    ?? .failure(spoken: "PadKey could not continue that scroll action.")
+            }
+        ) { return }
+        finish(performScroll(direction: direction, application: application), command: command, completion: completion)
+    }
+
+    private func performScroll(
+        direction: String,
+        application: NSRunningApplication?
+    ) -> MacCommandResponse {
         do {
             try UIAutomation.scroll(direction: direction)
-            finish(success(
+            return success(
                 intent: "scroll",
                 spoken: "Scrolling \(direction).",
                 actions: [MacCommandActionRecord(type: "scroll", appName: application?.localizedName, nodeId: nil, target: direction, text: nil)],
                 frontmostApp: application?.localizedName,
                 target: direction,
                 result: "Scrolled \(direction)"
-            ), command: command, completion: completion)
+            )
         } catch {
-            finish(toolFailure(intent: "scroll", error: error, app: application?.localizedName), command: command, completion: completion)
+            return toolFailure(intent: "scroll", error: error, app: application?.localizedName)
         }
     }
 
@@ -789,28 +999,24 @@ final class MacCommandCoordinator {
             return
         }
 
-        if !confirmed, MacActionSafetyPolicy.requiresConfirmation(command: command, target: plannedTargetSummary(plan, nodes: nodes)) {
-            let confirmation = makeConfirmation { [weak self] confirmedResponse in
-                guard let self else { return }
-                confirmedResponse(self.performPlanActions(plan, nodes: nodes, app: app, command: command))
-            }
-            let response = MacCommandResponse(
-                ok: true,
-                intent: "computer_control_confirmation",
-                spoken: "I’m ready to act in \(app.name). Confirm before I continue.",
-                actions: [],
-                frontmostApp: app.name,
-                selectedTarget: plannedTargetSummary(plan, nodes: nodes),
-                actionResult: "Action paused for confirmation",
-                clarification: nil,
-                options: nil,
-                confirmationRequired: true,
-                confirmationId: confirmation.id,
-                permissionRequired: nil,
-                message: nil
-            )
-            finish(response, command: command, completion: completion)
-            return
+        if !confirmed {
+            let targetSummary = plannedTargetSummary(plan, nodes: nodes)
+            let scope: MacActionApprovalScope = plan.actions.contains { action in
+                ["set_element_value", "select_option"].contains(action.tool)
+            } ? .externalWrite : .externalApp
+            if pauseForAccessApprovalIfNeeded(
+                intent: "computer_control",
+                command: command,
+                spokenAction: "act in \(app.name)",
+                appName: app.name,
+                target: targetSummary,
+                scope: scope,
+                completion: completion,
+                execute: { [weak self] in
+                    guard let self else { return .failure(spoken: "PadKey could not continue that planned action.") }
+                    return self.performPlanActions(plan, nodes: nodes, app: app, command: command)
+                }
+            ) { return }
         }
 
         finish(performPlanActions(plan, nodes: nodes, app: app, command: command), command: command, completion: completion)

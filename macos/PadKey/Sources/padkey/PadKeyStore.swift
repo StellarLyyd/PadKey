@@ -581,6 +581,45 @@ struct VoiceSyncSample: Codable, Identifiable {
     let duration: TimeInterval
 }
 
+enum PadKeyAccessMode: String, Codable, CaseIterable {
+    case askForApproval
+    case approveForMe
+    case fullAccess
+
+    var title: String {
+        switch self {
+        case .askForApproval:
+            return "Ask for approval"
+        case .approveForMe:
+            return "Approve for me"
+        case .fullAccess:
+            return "Full access"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .askForApproval:
+            return "Ask"
+        case .approveForMe:
+            return "Guided"
+        case .fullAccess:
+            return "Full"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .askForApproval:
+            return "Ask before controlling apps, writing outside PadKey, using the web, or changing external state."
+        case .approveForMe:
+            return "Only pause for actions detected as unsafe, sensitive, destructive, or third-party-facing."
+        case .fullAccess:
+            return "Run ordinary computer-control actions without prompts; still pause for hard-confirm actions."
+        }
+    }
+}
+
 struct PipelineSettings: Codable {
     var recognitionEngine: RecognitionEngine?
     var sessionTimeoutSeconds: Int
@@ -590,6 +629,7 @@ struct PipelineSettings: Codable {
     var keepRawHistory: Bool
     var robustRetryEnabled: Bool?
     var robustRetryMinDurationSeconds: Double?
+    var accessMode: PadKeyAccessMode?
 
     static let defaults = PipelineSettings(
         recognitionEngine: .autoRobust,
@@ -599,7 +639,8 @@ struct PipelineSettings: Codable {
         copyFallbackEnabled: true,
         keepRawHistory: true,
         robustRetryEnabled: true,
-        robustRetryMinDurationSeconds: 2.0
+        robustRetryMinDurationSeconds: 2.0,
+        accessMode: .approveForMe
     )
 
     var effectiveRecognitionEngine: RecognitionEngine {
@@ -614,6 +655,10 @@ struct PipelineSettings: Codable {
         robustRetryMinDurationSeconds ?? 2.0
     }
 
+    var effectiveAccessMode: PadKeyAccessMode {
+        accessMode ?? .approveForMe
+    }
+
     func normalized() -> PipelineSettings {
         var copy = self
         if copy.recognitionEngine == nil {
@@ -624,6 +669,9 @@ struct PipelineSettings: Codable {
         }
         if copy.robustRetryMinDurationSeconds == nil || copy.effectiveRobustRetryMinDurationSeconds < 0 {
             copy.robustRetryMinDurationSeconds = Self.defaults.robustRetryMinDurationSeconds
+        }
+        if copy.accessMode == nil {
+            copy.accessMode = Self.defaults.accessMode
         }
         let allowedTimeouts = [0, 30, 60, 90, 120, 180]
         if !allowedTimeouts.contains(copy.sessionTimeoutSeconds) {

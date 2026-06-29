@@ -17,11 +17,13 @@ final class PipelineDiagnosticsTests: XCTestCase {
             copyFallbackEnabled: true,
             keepRawHistory: true,
             robustRetryEnabled: nil,
-            robustRetryMinDurationSeconds: nil
+            robustRetryMinDurationSeconds: nil,
+            accessMode: nil
         ).normalized()
 
         XCTAssertEqual(settings.effectiveRecognitionEngine, .autoRobust)
         XCTAssertTrue(settings.effectiveRobustRetryEnabled)
+        XCTAssertEqual(settings.effectiveAccessMode, .approveForMe)
         XCTAssertEqual(settings.sessionTimeoutSeconds, PipelineSettings.defaults.sessionTimeoutSeconds)
     }
 

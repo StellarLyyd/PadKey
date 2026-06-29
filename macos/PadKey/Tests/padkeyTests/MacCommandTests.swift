@@ -82,6 +82,30 @@ final class MacCommandTests: XCTestCase {
         XCTAssertTrue(MacActionSafetyPolicy.requiresConfirmation(command: "call Chukwudi", target: "FaceTime"))
         XCTAssertFalse(MacActionSafetyPolicy.requiresConfirmation(command: "click continue", target: "Continue button"))
         XCTAssertFalse(MacActionSafetyPolicy.requiresConfirmation(command: "fill the search field", target: "Search"))
+        XCTAssertTrue(MacActionSafetyPolicy.requiresConfirmation(
+            command: "fill the search field",
+            target: "Search",
+            mode: .askForApproval,
+            scope: .externalApp
+        ))
+        XCTAssertFalse(MacActionSafetyPolicy.requiresConfirmation(
+            command: "fill the search field",
+            target: "Search",
+            mode: .fullAccess,
+            scope: .externalApp
+        ))
+        XCTAssertTrue(MacActionSafetyPolicy.requiresConfirmation(
+            command: "delete the file",
+            target: "Trash",
+            mode: .fullAccess,
+            scope: .externalWrite
+        ))
+        XCTAssertTrue(MacActionSafetyPolicy.requiresConfirmation(
+            command: "search the web for assistive speech devices",
+            target: "Browser search",
+            mode: .askForApproval,
+            scope: .internet
+        ))
     }
 
     func testAccessibilityMatcherPrioritizesExactAccessibleLabel() {
