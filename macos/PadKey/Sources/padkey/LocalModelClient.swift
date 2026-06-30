@@ -49,12 +49,12 @@ final class LocalModelClient {
             ?? URL(string: "http://127.0.0.1:11434/api/chat")!
         let primaryModel = model
             ?? environment["PADKEY_OLLAMA_MODEL"]
-            ?? "qwen3:4b"
+            ?? "gemma4:12b-mlx"
         let fallbackModels = environment["PADKEY_OLLAMA_FALLBACK_MODELS"]?
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-            ?? ["qwen3:4b", "qwen2.5:7b", "qwen2.5-coder:7b", "gemma4:12b-mlx"]
+            ?? ["gemma4:12b-mlx", "qwen3:4b", "qwen2.5:7b", "qwen2.5-coder:7b"]
         self.modelCandidates = Self.uniqueModels([primaryModel] + fallbackModels)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 14

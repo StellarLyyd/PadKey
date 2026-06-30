@@ -144,6 +144,20 @@ final class MacCommandTests: XCTestCase {
         XCTAssertEqual(plan.actions.first?.args.nodeId, "node_12")
     }
 
+    func testRuntimeInspectorParsesOllamaModels() {
+        let output = """
+        NAME                ID              SIZE      MODIFIED
+        gemma4:12b-mlx      197a75677efb    6.8 GB    9 days ago
+        qwen3:4b            359d7dd4bcda    2.5 GB    10 days ago
+        """
+        let models = AgentRuntimeInspector.parseOllamaList(output)
+
+        XCTAssertEqual(models.count, 2)
+        XCTAssertEqual(models.first?.name, "gemma4:12b-mlx")
+        XCTAssertEqual(models.first?.size, "6.8 GB")
+        XCTAssertEqual(models.first?.modified, "9 days ago")
+    }
+
     func testAppStateSnapshotIncludesRefsAndRedactsSecrets() {
         let app = FrontmostAppInfo(name: "Test App", bundleIdentifier: "com.example.test", processIdentifier: 123)
         let search = node(id: "node_1", role: "AXTextField", label: "Search", value: "assistive speech", focused: true)

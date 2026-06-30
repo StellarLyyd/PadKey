@@ -43,6 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         observeApplicationActivation()
         do {
             try commandServer.start()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                guard let self, !self.commandServer.isListening else { return }
+                self.floatingBar.flash("Agent bridge starting", detail: "PadKey is waiting for the local command bridge on port \(LocalCommandServer.defaultPort).")
+            }
         } catch {
             floatingBar.flash("Mac control unavailable", detail: error.localizedDescription)
         }
@@ -108,6 +112,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
         true
+    }
+
+    func isCommandBridgeListening() -> Bool {
+        commandServer.isListening
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

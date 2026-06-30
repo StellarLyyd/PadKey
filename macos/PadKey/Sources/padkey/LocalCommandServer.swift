@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import Network
 
@@ -15,6 +16,9 @@ final class LocalCommandServer {
         let service: String
         let version: Int
         let accessibilityReady: Bool
+        let bridgePort: UInt16
+        let bridgeListening: Bool
+        let visualPerceptionReady: Bool
     }
 
     private struct AccessibilityResponse: Codable {
@@ -34,7 +38,13 @@ final class LocalCommandServer {
     private let accessibility: AccessibilityTreeService
     private let queue = DispatchQueue(label: "com.stellarlyyd.padkey.command-server", qos: .userInitiated)
     private var listener: NWListener?
+    private var listenerReady = false
+    private var lastListenerState = "not started"
     private var recentRequestTimes: [Date] = []
+
+    var isListening: Bool {
+        listenerReady
+    }
 
     init(
         coordinator: MacCommandCoordinator = .shared,
@@ -56,9 +66,20 @@ final class LocalCommandServer {
         listener.newConnectionHandler = { [weak self] connection in
             self?.accept(connection)
         }
-        listener.stateUpdateHandler = { state in
-            if case .failed = state {
-                // The app UI reports reachability; no request content is logged here.
+        listener.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready:
+                self.listenerReady = true
+                self.lastListenerState = "ready"
+            case .failed(let error):
+                self.listenerReady = false
+                self.lastListenerState = "failed: \(error.localizedDescription)"
+            case .cancelled:
+                self.listenerReady = false
+                self.lastListenerState = "cancelled"
+            default:
+                self.lastListenerState = "\(state)"
             }
         }
         listener.start(queue: queue)
@@ -68,6 +89,8 @@ final class LocalCommandServer {
     func stop() {
         listener?.cancel()
         listener = nil
+        listenerReady = false
+        lastListenerState = "stopped"
     }
 
     private func accept(_ connection: NWConnection) {
@@ -150,8 +173,18 @@ final class LocalCommandServer {
                 ok: true,
                 service: "PadKey Mac Action Agent",
                 version: 1,
-                accessibilityReady: PermissionHelper.isAccessibilityTrusted
+                accessibilityReady: PermissionHelper.isAccessibilityTrusted,
+                bridgePort: Self.defaultPort,
+                bridgeListening: listenerReady,
+                visualPerceptionReady: CGPreflightScreenCaptureAccess()
             ), origin: request.headers["origin"])
+
+        case ("GET", "/runtime"):
+            let status = AgentRuntimeInspector.status(
+                bridgePort: Self.defaultPort,
+                bridgeListening: listenerReady
+            )
+            sendJSON(connection, status: 200, value: status, origin: request.headers["origin"])
 
         case ("GET", "/permissions"):
             sendJSON(connection, status: 200, value: coordinator.permissions(), origin: request.headers["origin"])
@@ -185,6 +218,21 @@ final class LocalCommandServer {
                 } catch {
                     self.sendError(connection, status: 422, code: "APP_STATE_FAILED", message: error.localizedDescription, origin: request.headers["origin"])
                 }
+            }
+
+        case ("GET", "/visual-state"):
+            let snapshot = VisualPerceptionService.captureTextSnapshot()
+            sendJSON(connection, status: snapshot.screenRecordingGranted ? 200 : 403, value: snapshot, origin: request.headers["origin"])
+
+        case ("POST", "/screen-recording-permission"):
+            DispatchQueue.main.async { [weak self] in
+                let granted = VisualPerceptionService.requestScreenRecordingPermission()
+                let readiness = VisualPerceptionReadiness(
+                    screenRecordingGranted: granted,
+                    visionOCRAvailable: true,
+                    detail: granted ? "Screen Recording is granted." : "Screen Recording is still blocked or waiting for System Settings."
+                )
+                self?.sendJSON(connection, status: granted ? 200 : 403, value: readiness, origin: request.headers["origin"])
             }
 
         case ("POST", "/command"):

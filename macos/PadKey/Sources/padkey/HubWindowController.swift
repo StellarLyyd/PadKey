@@ -617,6 +617,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         contentStack.addArrangedSubview(agentRuntimeHeader())
         contentStack.addArrangedSubview(agentCapabilityStrip())
         contentStack.addArrangedSubview(accessModePanel())
+        contentStack.addArrangedSubview(agentNativeRuntimePanel())
         contentStack.addArrangedSubview(agentRealtimeStackPanel())
         contentStack.addArrangedSubview(agentCommandComposer())
         contentStack.addArrangedSubview(sectionLabel("LIVE RUNTIME"))
@@ -1218,7 +1219,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         row.addArrangedSubview(agentCapabilityTile(
             value: "Local",
             label: "AI brain",
-            detail: "Ollama plans actions and answers chat",
+            detail: "Prefers MLX-tagged Ollama models on M5",
             accent: PadKeyTheme.purple
         ))
         row.addArrangedSubview(agentCapabilityTile(
@@ -1348,6 +1349,73 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
             stack.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -18)
         ])
         return panel
+    }
+
+    private func agentNativeRuntimePanel() -> NSView {
+        let runtime = AgentRuntimeInspector.status(
+            bridgePort: LocalCommandServer.defaultPort,
+            bridgeListening: AppDelegate.shared?.isCommandBridgeListening() ?? false
+        )
+        let panel = RoundedView(
+            fillColor: PadKeyTheme.panelBackground,
+            radius: 12,
+            strokeColor: NSColor.separatorColor.withAlphaComponent(0.42),
+            strokeWidth: 1
+        )
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.widthAnchor.constraint(equalToConstant: 760).isActive = true
+
+        let title = NSTextField(labelWithString: "M5 local agent runtime")
+        title.font = .systemFont(ofSize: 15, weight: .bold)
+        title.textColor = PadKeyTheme.ink
+
+        let detail = NSTextField(wrappingLabelWithString: "This is the native bridge PadKey needs for total computer use: local model brain, visual text perception, Accessibility state, and approval-gated actions.")
+        detail.font = .systemFont(ofSize: 12, weight: .medium)
+        detail.textColor = PadKeyTheme.secondaryInk
+        detail.maximumNumberOfLines = 3
+
+        let rows = NSStackView()
+        rows.orientation = .vertical
+        rows.spacing = 8
+        rows.addArrangedSubview(settingsDetailRow("Machine", "\(runtime.chip); \(runtime.memoryGB.map { "\($0) GB" } ?? "memory unknown"); \(runtime.osVersion)"))
+        rows.addArrangedSubview(settingsDetailRow("Brain", runtime.recommendedBrain))
+        rows.addArrangedSubview(settingsDetailRow("MLX", runtime.mlx.detail))
+        rows.addArrangedSubview(settingsDetailRow("Ollama", ollamaRuntimeSummary(runtime.ollama)))
+        rows.addArrangedSubview(settingsDetailRow("Vision", runtime.visualPerception.detail))
+        rows.addArrangedSubview(settingsDetailRow("Bridge", runtime.bridge.detail))
+        rows.addArrangedSubview(settingsDetailRow("Gaps", runtime.gaps.isEmpty ? "No runtime blockers detected." : runtime.gaps.joined(separator: " ")))
+
+        let permissionButton = primaryButton("Enable Screen Recording", action: #selector(requestAgentScreenRecording), inverted: true)
+        permissionButton.isHidden = runtime.visualPerception.screenRecordingGranted
+
+        [title, detail, rows, permissionButton].forEach {
+            panel.addSubview($0)
+            $0.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        NSLayoutConstraint.activate([
+            title.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 20),
+            title.topAnchor.constraint(equalTo: panel.topAnchor, constant: 18),
+            detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            detail.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -20),
+            detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 7),
+            rows.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            rows.trailingAnchor.constraint(equalTo: detail.trailingAnchor),
+            rows.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 14),
+            permissionButton.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            permissionButton.topAnchor.constraint(equalTo: rows.bottomAnchor, constant: 14),
+            permissionButton.bottomAnchor.constraint(lessThanOrEqualTo: panel.bottomAnchor, constant: -18),
+            rows.bottomAnchor.constraint(lessThanOrEqualTo: panel.bottomAnchor, constant: -18)
+        ])
+
+        return panel
+    }
+
+    private func ollamaRuntimeSummary(_ status: OllamaRuntimeStatus) -> String {
+        guard status.available else { return status.detail }
+        let modelNames = status.models.prefix(3).map(\.name).joined(separator: ", ")
+        if modelNames.isEmpty { return status.detail }
+        return "\(status.detail) Models: \(modelNames)."
     }
 
     private func agentActionStatus() -> NSView {
@@ -3761,6 +3829,12 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         PermissionHelper.promptAccessibilityIfNeeded()
         PermissionHelper.openPrivacySettings()
         commandCoordinator.refreshPermissionState()
+    }
+
+    @objc private func requestAgentScreenRecording() {
+        _ = VisualPerceptionService.requestScreenRecordingPermission()
+        PermissionHelper.openScreenRecordingSettings()
+        render()
     }
 
     @objc private func agentControlDidUpdate() {

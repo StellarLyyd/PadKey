@@ -57,4 +57,18 @@ enum PermissionHelper {
             }
         }
     }
+
+    static func openScreenRecordingSettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenRecording"
+        ]
+
+        for candidate in candidates {
+            if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
+                return
+            }
+        }
+        openPrivacySettings()
+    }
 }
