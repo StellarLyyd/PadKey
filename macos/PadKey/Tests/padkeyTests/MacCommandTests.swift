@@ -38,6 +38,14 @@ final class MacCommandTests: XCTestCase {
             .computerControl("Choose the second option in this app")
         )
         XCTAssertEqual(
+            MacCommandParser.parse("Do the next engineering step in this app"),
+            .computerControl("Do the next engineering step in this app")
+        )
+        XCTAssertEqual(
+            MacCommandParser.parse("Implement that"),
+            .computerControl("Implement that")
+        )
+        XCTAssertEqual(
             MacCommandParser.parse("Tell me about local speech recognition"),
             .conversation("local speech recognition")
         )
@@ -80,6 +88,49 @@ final class MacCommandTests: XCTestCase {
         XCTAssertEqual(MacCommandParser.parse("Scroll down"), .scroll(direction: "down"))
         XCTAssertEqual(MacCommandParser.parse("Go back"), .goBack)
         XCTAssertEqual(MacCommandParser.parse("Close window"), .closeWindow)
+    }
+
+    func testVoiceRoutingTreatsNoTargetSpeechAsAgentInput() {
+        XCTAssertEqual(
+            VoiceRoutingPolicy.route(
+                transcript: "hello",
+                commandModeEnabled: true,
+                hasFocusedTextTarget: false
+            ).destination,
+            .agent
+        )
+        XCTAssertEqual(
+            VoiceRoutingPolicy.route(
+                transcript: "Can you open Safari",
+                commandModeEnabled: true,
+                hasFocusedTextTarget: true
+            ).destination,
+            .agent
+        )
+        XCTAssertEqual(
+            VoiceRoutingPolicy.route(
+                transcript: "The current build still needs a cleaner explanation.",
+                commandModeEnabled: true,
+                hasFocusedTextTarget: true
+            ).destination,
+            .dictation
+        )
+        XCTAssertEqual(
+            VoiceRoutingPolicy.route(
+                transcript: "The current build still needs a cleaner explanation.",
+                commandModeEnabled: true,
+                hasFocusedTextTarget: false
+            ).destination,
+            .agent
+        )
+        XCTAssertEqual(
+            VoiceRoutingPolicy.route(
+                transcript: "Open Safari",
+                commandModeEnabled: false,
+                hasFocusedTextTarget: false
+            ).destination,
+            .dictation
+        )
     }
 
     func testSafetyPolicyRequiresConfirmationForConsequentialActions() {

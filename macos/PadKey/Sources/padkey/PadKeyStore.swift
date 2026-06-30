@@ -629,6 +629,7 @@ struct PipelineSettings: Codable {
     var keepRawHistory: Bool
     var robustRetryEnabled: Bool?
     var robustRetryMinDurationSeconds: Double?
+    var agentFallbackEnabled: Bool?
     var accessMode: PadKeyAccessMode?
 
     static let defaults = PipelineSettings(
@@ -640,6 +641,7 @@ struct PipelineSettings: Codable {
         keepRawHistory: true,
         robustRetryEnabled: true,
         robustRetryMinDurationSeconds: 2.0,
+        agentFallbackEnabled: true,
         accessMode: .approveForMe
     )
 
@@ -659,6 +661,10 @@ struct PipelineSettings: Codable {
         accessMode ?? .approveForMe
     }
 
+    var effectiveAgentFallbackEnabled: Bool {
+        agentFallbackEnabled ?? true
+    }
+
     func normalized() -> PipelineSettings {
         var copy = self
         if copy.recognitionEngine == nil {
@@ -669,6 +675,9 @@ struct PipelineSettings: Codable {
         }
         if copy.robustRetryMinDurationSeconds == nil || copy.effectiveRobustRetryMinDurationSeconds < 0 {
             copy.robustRetryMinDurationSeconds = Self.defaults.robustRetryMinDurationSeconds
+        }
+        if copy.agentFallbackEnabled == nil {
+            copy.agentFallbackEnabled = Self.defaults.agentFallbackEnabled
         }
         if copy.accessMode == nil {
             copy.accessMode = Self.defaults.accessMode

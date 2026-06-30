@@ -360,9 +360,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
-        if store.pipelineSettings.commandModeEnabled,
-           MacCommandParser.looksLikeVoiceCommand(processedTranscript)
-        {
+        let routingDecision = VoiceRoutingPolicy.route(
+            transcript: processedTranscript,
+            commandModeEnabled: store.pipelineSettings.commandModeEnabled,
+            hasFocusedTextTarget: deliveryContext.targetField != nil,
+            targetIsPasteboardOnly: deliveryContext.targetField?.pasteboardOnly ?? false,
+            agentFallbackEnabled: store.pipelineSettings.effectiveAgentFallbackEnabled
+        )
+
+        if routingDecision.routesToAgent {
             floatingBar.setStatus("Working...", detail: processedTranscript)
             let commandSource = result.inputSource ?? store.selectedInputSource
             let commandRecord = store.addHistory(
@@ -383,7 +389,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 processedTranscript: processedTranscript,
                 interpretedCommand: processedTranscript,
                 actionTaken: nil,
-                confidenceStatus: result.fallbackReason,
+                confidenceStatus: [result.fallbackReason, routingDecision.reason].compactMap { $0 }.joined(separator: " | "),
                 audioURL: result.audioURL
             )
             let request = MacCommandRequest(
@@ -477,7 +483,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             latency: latency,
             inputSource: dictationResult.inputSource ?? store.selectedInputSource,
             processedTranscript: processedTranscript,
-            interpretedCommand: MacCommandParser.looksLikeVoiceCommand(processedTranscript) ? processedTranscript : nil,
+            interpretedCommand: nil,
             actionTaken: nil,
             confidenceStatus: dictationResult.fallbackReason,
             audioURL: dictationResult.audioURL

@@ -18,11 +18,13 @@ final class PipelineDiagnosticsTests: XCTestCase {
             keepRawHistory: true,
             robustRetryEnabled: nil,
             robustRetryMinDurationSeconds: nil,
+            agentFallbackEnabled: nil,
             accessMode: nil
         ).normalized()
 
         XCTAssertEqual(settings.effectiveRecognitionEngine, .autoRobust)
         XCTAssertTrue(settings.effectiveRobustRetryEnabled)
+        XCTAssertTrue(settings.effectiveAgentFallbackEnabled)
         XCTAssertEqual(settings.effectiveAccessMode, .approveForMe)
         XCTAssertEqual(settings.sessionTimeoutSeconds, PipelineSettings.defaults.sessionTimeoutSeconds)
     }

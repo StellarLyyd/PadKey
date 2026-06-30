@@ -2462,7 +2462,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         let panel = RoundedView(fillColor: PadKeyTheme.panelBackground, radius: 12, strokeColor: NSColor.separatorColor.withAlphaComponent(0.42), strokeWidth: 1)
         panel.translatesAutoresizingMaskIntoConstraints = false
         panel.widthAnchor.constraint(equalToConstant: 760).isActive = true
-        panel.heightAnchor.constraint(greaterThanOrEqualToConstant: 276).isActive = true
+        panel.heightAnchor.constraint(greaterThanOrEqualToConstant: 356).isActive = true
 
         let left = NSStackView()
         left.orientation = .vertical
@@ -2480,6 +2480,12 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
             detail: "Route casual chat, natural requests, and Mac-control speech through PadKey instead of typing it.",
             isOn: settings.commandModeEnabled,
             action: #selector(toggleCommandMode)
+        ))
+        left.addArrangedSubview(pipelineToggleRow(
+            title: "Agent fallback",
+            detail: "When no text field is focused, send natural speech to the agent instead of silently saving it.",
+            isOn: settings.effectiveAgentFallbackEnabled,
+            action: #selector(toggleAgentFallback)
         ))
         left.addArrangedSubview(pipelineToggleRow(
             title: "Clipboard fallback",
@@ -3738,6 +3744,11 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
 
     @objc private func toggleCommandMode() {
         store.updatePipelineSettings { $0.commandModeEnabled.toggle() }
+        render()
+    }
+
+    @objc private func toggleAgentFallback() {
+        store.updatePipelineSettings { $0.agentFallbackEnabled = !$0.effectiveAgentFallbackEnabled }
         render()
     }
 

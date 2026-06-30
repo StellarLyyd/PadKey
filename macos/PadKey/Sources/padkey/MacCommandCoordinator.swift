@@ -208,7 +208,7 @@ enum MacCommandParser {
         let lower = normalized(command)
         guard lower.count <= 260 else { return false }
         return lower.range(
-            of: #"^(?:find|choose|pick|select|click|press|focus|fill|type|open|navigate|go to|look at|use|show|create|start|search|switch|move|resize|close|minimize|maximize)\b"#,
+            of: #"^(?:do|fix|continue|finish|build|implement|revise|change|update|test|run|debug|inspect|analyze|control|find|choose|pick|select|click|press|focus|fill|type|open|navigate|go to|look at|use|show|create|start|search|switch|move|resize|close|minimize|maximize)\b"#,
             options: .regularExpression
         ) != nil
     }
@@ -234,7 +234,9 @@ enum MacCommandParser {
         let actionMarkers = [
             "find", "choose", "pick", "select", "click", "press", "focus",
             "fill", "type", "open", "navigate", "go to", "look at", "use",
-            "show", "new", "create", "start", "search", "switch"
+            "show", "new", "create", "start", "search", "switch", "do",
+            "fix", "continue", "finish", "build", "implement", "revise",
+            "change", "update", "test", "run", "debug", "inspect", "analyze"
         ]
         return liveStateMarkers.contains { lower.contains($0) }
             && actionMarkers.contains { lower.contains($0) }
@@ -1208,6 +1210,18 @@ final class MacCommandCoordinator {
             return
         }
 
+        if let computerStateResponse = deterministicComputerStateResponse(for: cleanedPrompt, application: application) {
+            finish(success(
+                intent: "local_computer_state",
+                spoken: computerStateResponse,
+                actions: [MacCommandActionRecord(type: "local_computer_state", appName: application?.localizedName ?? "PadKey", nodeId: nil, target: "Current Mac context", text: cleanedPrompt)],
+                frontmostApp: application?.localizedName ?? "PadKey",
+                target: "Current Mac context",
+                result: "Answered from local app and screen context"
+            ), command: command, completion: completion)
+            return
+        }
+
         snapshot.status = "Thinking"
         snapshot.frontmostApp = application?.localizedName ?? "PadKey"
         snapshot.detectedIntent = "local_conversation"
@@ -1260,6 +1274,59 @@ final class MacCommandCoordinator {
         }
     }
 
+    private func deterministicComputerStateResponse(for prompt: String, application: NSRunningApplication?) -> String? {
+        guard Self.isComputerStatePrompt(prompt) else { return nil }
+
+        var parts: [String] = []
+        if let app = try? accessibility.frontmostApp(preferred: application) {
+            parts.append("You are in \(app.name).")
+            if PermissionHelper.isAccessibilityTrusted,
+               let running = NSRunningApplication(processIdentifier: app.processIdentifier),
+               let nodes = try? accessibility.getAccessibilityTree(for: running, maximumNodes: 180) {
+                let snapshot = AppStateSnapshotBuilder.snapshot(app: app, nodes: nodes, maxElements: 8)
+                if let focused = snapshot.focusedElement {
+                    parts.append("The focused control looks like \(focused.name).")
+                }
+                let labels = nodes
+                    .map(\.displayName)
+                    .map(Self.cleanVisibleText)
+                    .filter { !$0.isEmpty && $0.count <= 80 && !$0.hasPrefix("AX") }
+                    .reduce(into: [String]()) { unique, label in
+                        if !unique.contains(where: { $0.caseInsensitiveCompare(label) == .orderedSame }) {
+                            unique.append(label)
+                        }
+                    }
+                    .prefix(6)
+                if !labels.isEmpty {
+                    parts.append("I can see controls or text like \(labels.joined(separator: ", ")).")
+                }
+            }
+        } else {
+            parts.append("I cannot identify the frontmost app yet.")
+        }
+
+        if CGPreflightScreenCaptureAccess() {
+            let visual = VisualPerceptionService.captureTextSnapshot(maxElements: 8)
+            let visible = visual.textElements
+                .map(\.text)
+                .map(Self.cleanVisibleText)
+                .filter { !$0.isEmpty && $0.count <= 120 }
+                .prefix(4)
+            if !visible.isEmpty {
+                parts.append("Visible screen text includes \(visible.joined(separator: ", ")).")
+            }
+        }
+
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    private static func cleanVisibleText(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\u{fffd}", with: "")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func conversationContext(application: NSRunningApplication?, prompt: String) -> String {
         var lines: [String] = []
         if let app = try? accessibility.frontmostApp(preferred: application) {
@@ -1284,7 +1351,25 @@ final class MacCommandCoordinator {
 
     private func shouldIncludeComputerContext(_ prompt: String) -> Bool {
         let lower = prompt.lowercased()
-        return ["screen", "this app", "current app", "window", "visible", "what do you see", "where am i", "on my computer"].contains { lower.contains($0) }
+        return Self.isComputerStatePrompt(prompt)
+            || ["screen", "this app", "current app", "window", "visible", "what do you see", "where am i", "on my computer"].contains { lower.contains($0) }
+    }
+
+    private static func isComputerStatePrompt(_ prompt: String) -> Bool {
+        let lower = prompt.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return [
+            "what do you see",
+            "what can you see",
+            "what is on my screen",
+            "what's on my screen",
+            "where am i",
+            "what app am i in",
+            "what is this app",
+            "current app",
+            "frontmost app",
+            "on my computer",
+            "on screen"
+        ].contains { lower.contains($0) }
     }
 
     private static func quickConversationResponse(for prompt: String) -> String? {
