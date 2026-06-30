@@ -590,7 +590,7 @@ final class MacCommandCoordinator {
             executeKeyboardShortcut(intent: "close_window", spoken: "Closing the window.", key: "w", command: transcript, application: preferredApplication, completion: completion)
 
         case .unknown:
-            executeLocalConversation(transcript, command: transcript, application: preferredApplication, completion: completion)
+            executeUniversalAgentIntent(transcript, command: transcript, application: preferredApplication, completion: completion)
         }
     }
 
@@ -863,7 +863,7 @@ final class MacCommandCoordinator {
             snapshot.actionResult = "Inspecting \(nodes.count) controls in \(app.name)"
             publishSnapshot()
 
-            planner.plan(transcript: instruction, frontmostApp: app, nodes: nodes) { [weak self] result in
+            planner.plan(transcript: instruction, frontmostApp: app, nodes: nodes, visualContext: visualContextForPlanning()) { [weak self] result in
                 DispatchQueue.main.async {
                     guard let self else { return }
                     switch result {
@@ -882,6 +882,133 @@ final class MacCommandCoordinator {
         } catch {
             finish(toolFailure(intent: "computer_control_runtime", error: error, app: application?.localizedName), command: command, completion: completion)
         }
+    }
+
+    private func executeUniversalAgentIntent(
+        _ instruction: String,
+        command: String,
+        application: NSRunningApplication?,
+        completion: @escaping (MacCommandResponse) -> Void
+    ) {
+        if let response = fastUniversalNonActionResponse(for: instruction, application: application) {
+            finish(response, command: command, completion: completion)
+            return
+        }
+
+        guard PermissionHelper.isAccessibilityTrusted else {
+            PermissionHelper.promptAccessibilityIfNeeded()
+            finish(accessibilityFailure(intent: "universal_agent", app: application?.localizedName), command: command, completion: completion)
+            return
+        }
+
+        do {
+            let app = try accessibility.frontmostApp(preferred: application)
+            let nodes = try accessibility.getAccessibilityTree(for: application, maximumNodes: 500)
+            guard !nodes.isEmpty else {
+                executeLocalConversation(instruction, command: command, application: application, completion: completion)
+                return
+            }
+
+            snapshot.status = "Planning"
+            snapshot.frontmostApp = app.name
+            snapshot.detectedIntent = "universal_agent"
+            snapshot.actionResult = "Observing \(app.name) and planning from natural speech"
+            publishSnapshot()
+
+            planner.plan(transcript: instruction, frontmostApp: app, nodes: nodes, visualContext: visualContextForPlanning()) { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    switch result {
+                    case .failure(let error):
+                        self.finish(self.universalPlannerFallback(
+                            instruction: instruction,
+                            app: app,
+                            nodes: nodes,
+                            error: error
+                        ), command: command, completion: completion)
+                    case .success(let plan):
+                        self.executePlan(plan, nodes: nodes, app: app, command: command, completion: completion)
+                    }
+                }
+            }
+        } catch {
+            executeLocalConversation(instruction, command: command, application: application, completion: completion)
+        }
+    }
+
+    private func fastUniversalNonActionResponse(for instruction: String, application: NSRunningApplication?) -> MacCommandResponse? {
+        let lower = instruction.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lower.isEmpty else { return nil }
+        let statementMarkers = [
+            "i am just testing",
+            "i'm just testing",
+            "just testing",
+            "this feels",
+            "it feels",
+            "i feel",
+            "i am confused",
+            "i'm confused",
+            "i don't know",
+            "i dont know"
+        ]
+        guard statementMarkers.contains(where: { lower.contains($0) }) else { return nil }
+        let actionMarkers = [
+            "open", "launch", "start", "click", "press", "choose", "select", "type",
+            "write", "fill", "focus", "scroll", "copy", "paste", "move", "resize",
+            "close", "minimize", "maximize", "search", "find", "create", "make",
+            "build", "fix", "change", "update", "implement", "run", "debug",
+            "use", "show", "navigate"
+        ]
+        let paddedLower = " \(lower.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)) "
+        if actionMarkers.contains(where: { paddedLower.contains(" \($0) ") }) || lower.contains("go to") {
+            return nil
+        }
+        let appName = application?.localizedName ?? NSWorkspace.shared.frontmostApplication?.localizedName ?? "this Mac"
+        return MacCommandResponse(
+            ok: true,
+            intent: "universal_fast_conversation",
+            spoken: "I hear you. I am listening in \(appName); tell me the outcome you want and I will try to act on the current app.",
+            actions: [MacCommandActionRecord(type: "fast_conversation", appName: appName, nodeId: nil, target: "Natural speech", text: instruction)],
+            frontmostApp: appName,
+            selectedTarget: "Natural speech",
+            actionResult: "Answered without waiting for the planner",
+            clarification: nil,
+            options: nil,
+            confirmationRequired: false,
+            confirmationId: nil,
+            permissionRequired: nil,
+            message: nil
+        )
+    }
+
+    private func universalPlannerFallback(
+        instruction: String,
+        app: FrontmostAppInfo,
+        nodes: [AccessibilityNode],
+        error: Error
+    ) -> MacCommandResponse {
+        let snapshot = AppStateSnapshotBuilder.snapshot(app: app, nodes: nodes, maxElements: 8)
+        let visibleControls = snapshot.actionableElements
+            .prefix(4)
+            .map(\.name)
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
+        let context = visibleControls.isEmpty ? "I can still see \(nodes.count) controls in \(app.name)." : "I can see controls like \(visibleControls)."
+        return MacCommandResponse(
+            ok: false,
+            intent: "universal_agent_fallback",
+            spoken: "I heard you, but the local planner did not answer fast enough. \(context)",
+            actions: [MacCommandActionRecord(type: "inspect", appName: app.name, nodeId: nil, target: "Current app", text: instruction)],
+            frontmostApp: app.name,
+            selectedTarget: nil,
+            actionResult: "Universal planner fallback: \(error.localizedDescription)",
+            clarification: "The local planner timed out. Say the specific action you want in \(app.name), and I will try the fast control path.",
+            options: Array(snapshot.actionableElements.prefix(3).map(\.name)),
+            confirmationRequired: false,
+            confirmationId: nil,
+            permissionRequired: nil,
+            message: "Planner fallback returned without a second model call."
+        )
     }
 
     private func executeKeyboardShortcut(
@@ -1044,6 +1171,26 @@ final class MacCommandCoordinator {
             return
         }
 
+        if plan.type == "answer" {
+            let response = MacCommandResponse(
+                ok: true,
+                intent: "universal_answer",
+                spoken: plan.spoken,
+                actions: [],
+                frontmostApp: app.name,
+                selectedTarget: nil,
+                actionResult: "Answered from current app context",
+                clarification: nil,
+                options: plan.options,
+                confirmationRequired: false,
+                confirmationId: nil,
+                permissionRequired: nil,
+                message: nil
+            )
+            finish(response, command: command, completion: completion)
+            return
+        }
+
         if !confirmed {
             let targetSummary = plannedTargetSummary(plan, nodes: nodes)
             let scope: MacActionApprovalScope = plan.actions.contains { action in
@@ -1076,26 +1223,37 @@ final class MacCommandCoordinator {
         var records: [MacCommandActionRecord] = []
         do {
             for action in plan.actions {
-                guard let nodeId = action.args.nodeId,
-                      let node = nodes.first(where: { $0.id == nodeId })
-                else {
-                    throw AccessibilityTreeError.elementUnavailable
-                }
                 switch action.tool {
                 case "focus_element":
+                    let (nodeId, node) = try plannedNode(for: action, nodes: nodes)
                     try accessibility.focusElement(nodeId: nodeId)
                     records.append(MacCommandActionRecord(type: "focus", appName: app.name, nodeId: nodeId, target: node.displayName, text: nil))
                 case "click_element":
+                    let (nodeId, node) = try plannedNode(for: action, nodes: nodes)
                     try accessibility.clickElement(nodeId: nodeId)
                     records.append(MacCommandActionRecord(type: "click", appName: app.name, nodeId: nodeId, target: node.displayName, text: nil))
                 case "set_element_value":
+                    let (nodeId, node) = try plannedNode(for: action, nodes: nodes)
                     guard let text = action.args.text else { throw AccessibilityTreeError.actionUnsupported("text entry") }
                     try accessibility.setElementValue(nodeId: nodeId, value: text)
                     records.append(MacCommandActionRecord(type: "set_value", appName: app.name, nodeId: nodeId, target: node.displayName, text: text))
                 case "select_option":
+                    let (nodeId, _) = try plannedNode(for: action, nodes: nodes)
                     guard let option = action.args.option else { throw AccessibilityTreeError.actionUnsupported("selection") }
                     let selected = try accessibility.selectOption(option, from: nodeId)
                     records.append(MacCommandActionRecord(type: "select", appName: app.name, nodeId: selected.id, target: selected.displayName, text: option))
+                case "keyboard_shortcut":
+                    guard let key = action.args.key else { throw AccessibilityTreeError.actionUnsupported("keyboard shortcut") }
+                    try UIAutomation.pressCommandKey(key)
+                    records.append(MacCommandActionRecord(type: "keyboard_shortcut", appName: app.name, nodeId: nil, target: "Command-\(key)", text: nil))
+                case "press_key":
+                    guard let key = action.args.key else { throw AccessibilityTreeError.actionUnsupported("key press") }
+                    try UIAutomation.pressKey(key)
+                    records.append(MacCommandActionRecord(type: "key_press", appName: app.name, nodeId: nil, target: key, text: nil))
+                case "scroll":
+                    guard let direction = action.args.direction else { throw AccessibilityTreeError.actionUnsupported("scroll") }
+                    try UIAutomation.scroll(direction: direction)
+                    records.append(MacCommandActionRecord(type: "scroll", appName: app.name, nodeId: nil, target: direction, text: nil))
                 default:
                     throw AppActionPlannerError.invalidPlan("The local model requested an unsupported action.")
                 }
@@ -1111,6 +1269,22 @@ final class MacCommandCoordinator {
         } catch {
             return toolFailure(intent: "ui_action", error: error, app: app.name)
         }
+    }
+
+    private func plannedNode(for action: PlannerAction, nodes: [AccessibilityNode]) throws -> (String, AccessibilityNode) {
+        guard let nodeId = action.args.nodeId,
+              let node = nodes.first(where: { $0.id == nodeId })
+        else {
+            throw AccessibilityTreeError.elementUnavailable
+        }
+        return (nodeId, node)
+    }
+
+    private func visualContextForPlanning() -> String? {
+        guard CGPreflightScreenCaptureAccess() else { return nil }
+        let snapshot = VisualPerceptionService.captureTextSnapshot(maxElements: 20)
+        guard snapshot.screenRecordingGranted else { return nil }
+        return snapshot.compactDescription
     }
 
     private func postActionObservation(app: FrontmostAppInfo, actionCount: Int) -> String {

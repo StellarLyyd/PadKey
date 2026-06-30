@@ -154,6 +154,43 @@ enum UIAutomation {
         """)
     }
 
+    static func pressKey(_ key: String) throws {
+        let keyCode: Int
+        switch key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "enter", "return":
+            keyCode = 36
+        case "tab":
+            keyCode = 48
+        case "escape", "esc":
+            keyCode = 53
+        case "space":
+            keyCode = 49
+        case "up":
+            keyCode = 126
+        case "down":
+            keyCode = 125
+        case "left":
+            keyCode = 123
+        case "right":
+            keyCode = 124
+        case "pageup", "page up":
+            keyCode = 116
+        case "pagedown", "page down":
+            keyCode = 121
+        case "delete", "backspace":
+            keyCode = 51
+        case "forwarddelete", "forward delete":
+            keyCode = 117
+        default:
+            throw UIAutomationError.unsupported("Unsupported key press: \(key)")
+        }
+        _ = try runAppleScript("""
+        tell application "System Events"
+            key code \(keyCode)
+        end tell
+        """)
+    }
+
     static func scroll(direction: String) throws {
         let keyCode: Int
         switch direction.lowercased() {

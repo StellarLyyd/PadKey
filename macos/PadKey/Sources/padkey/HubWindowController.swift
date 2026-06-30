@@ -665,7 +665,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
             "The macOS app receives that PadKey stream natively, not just inside the Studio browser view.",
             "The selected input source controls dictation and agent commands. MacBook microphone capture is only used when explicitly selected.",
             "Press and hold fn to capture from the selected source. Release fn to transcribe and act.",
-            "If the transcript looks like a command, Agent Control maps it to Mac actions such as open app, live UI inspection, click, type, copy, paste, scroll, and close window.",
+            "Agent Control treats natural speech as an observe-plan-act loop for the current app, using deterministic app tools, local model planning, live UI inspection, click, type, copy, paste, scroll, and keyboard actions.",
             "Signal Monitor shows the actual incoming PadKey signal so you can verify whether audio came from hardware or the MacBook mic."
         ]))
         contentStack.addArrangedSubview(sectionLabel("PERMISSIONS"))
@@ -1165,7 +1165,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         headline.textColor = .white
         headline.maximumNumberOfLines = 2
 
-        let body = NSTextField(wrappingLabelWithString: "No wake phrase required. PadKey cleans spoken text, understands personal vocabulary, chats through the local model, and routes command-shaped speech into a live frontmost-app runtime with native Accessibility.")
+        let body = NSTextField(wrappingLabelWithString: "No wake phrase required. PadKey cleans spoken text, understands personal vocabulary, chats through the local model, and routes agent speech into a live frontmost-app runtime with native Accessibility.")
         body.font = .systemFont(ofSize: 13, weight: .semibold)
         body.textColor = NSColor.white.withAlphaComponent(0.86)
         body.maximumNumberOfLines = 3

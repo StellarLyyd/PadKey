@@ -201,6 +201,40 @@ final class MacCommandTests: XCTestCase {
         XCTAssertEqual(plan.actions.first?.args.nodeId, "node_12")
     }
 
+    func testPlannerAcceptsUniversalSafeToolsAndAnswers() throws {
+        let shortcut = """
+        {"type":"ui_action","spoken":"Opening a new item.","actions":[{"tool":"keyboard_shortcut","args":{"key":"n"}}]}
+        """
+        XCTAssertEqual(try AppActionPlanner.decodeAndValidate(shortcut, validNodes: []).actions.first?.tool, "keyboard_shortcut")
+
+        let keyPress = """
+        {"type":"ui_action","spoken":"Pressing enter.","actions":[{"tool":"press_key","args":{"key":"enter"}}]}
+        """
+        XCTAssertEqual(try AppActionPlanner.decodeAndValidate(keyPress, validNodes: []).actions.first?.tool, "press_key")
+
+        let scroll = """
+        {"type":"ui_action","spoken":"Scrolling down.","actions":[{"tool":"scroll","args":{"direction":"down"}}]}
+        """
+        XCTAssertEqual(try AppActionPlanner.decodeAndValidate(scroll, validNodes: []).actions.first?.tool, "scroll")
+
+        let answer = """
+        {"type":"answer","spoken":"You are currently in Safari.","actions":[]}
+        """
+        XCTAssertEqual(try AppActionPlanner.decodeAndValidate(answer, validNodes: []).type, "answer")
+    }
+
+    func testPlannerRejectsUnsafeUniversalTools() {
+        let unsupportedShortcut = """
+        {"type":"ui_action","spoken":"Running terminal.","actions":[{"tool":"keyboard_shortcut","args":{"key":"q"}}]}
+        """
+        XCTAssertThrowsError(try AppActionPlanner.decodeAndValidate(unsupportedShortcut, validNodes: []))
+
+        let answerWithAction = """
+        {"type":"answer","spoken":"Sure.","actions":[{"tool":"scroll","args":{"direction":"down"}}]}
+        """
+        XCTAssertThrowsError(try AppActionPlanner.decodeAndValidate(answerWithAction, validNodes: []))
+    }
+
     func testRuntimeInspectorParsesOllamaModels() {
         let output = """
         NAME                ID              SIZE      MODIFIED

@@ -2,6 +2,7 @@ import Foundation
 
 enum LocalModelError: LocalizedError {
     case offline
+    case timedOut
     case invalidResponse
     case server(String)
 
@@ -9,6 +10,8 @@ enum LocalModelError: LocalizedError {
         switch self {
         case .offline:
             return "Local model is offline. I can still run basic commands."
+        case .timedOut:
+            return "Local model took too long. I can still inspect and run direct Mac controls."
         case .invalidResponse:
             return "The local model returned an invalid action plan."
         case .server(let message):
@@ -38,6 +41,7 @@ final class LocalModelClient {
     private let endpoint: URL
     private let modelCandidates: [String]
     private let session: URLSession
+    private let hardTimeoutSeconds: TimeInterval
 
     init(
         endpoint: URL? = nil,
@@ -61,6 +65,10 @@ final class LocalModelClient {
         configuration.timeoutIntervalForResource = 18
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         session = URLSession(configuration: configuration)
+        hardTimeoutSeconds = environment["PADKEY_LOCAL_MODEL_TIMEOUT_SECONDS"]
+            .flatMap(Double.init)
+            .map { max(4, min($0, 30)) }
+            ?? 5
     }
 
     func chat(
@@ -109,19 +117,47 @@ final class LocalModelClient {
             return
         }
 
-        session.dataTask(with: request) { data, response, error in
+        let lock = NSLock()
+        var didComplete = false
+        var timeoutWork: DispatchWorkItem?
+        var task: URLSessionDataTask?
+
+        func finish(_ result: Result<String, Error>) {
+            lock.lock()
+            if didComplete {
+                lock.unlock()
+                return
+            }
+            didComplete = true
+            lock.unlock()
+            timeoutWork?.cancel()
+            completion(result)
+        }
+
+        let workItem = DispatchWorkItem {
+            task?.cancel()
+            finish(.failure(LocalModelError.timedOut))
+        }
+        timeoutWork = workItem
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + hardTimeoutSeconds, execute: workItem)
+
+        task = session.dataTask(with: request) { data, response, error in
             if let error = error as? URLError,
                [.cannotConnectToHost, .cannotFindHost, .networkConnectionLost, .timedOut].contains(error.code)
             {
-                completion(.failure(LocalModelError.offline))
+                finish(.failure(LocalModelError.offline))
                 return
             }
             if let error {
-                completion(.failure(error))
+                if (error as NSError).code == NSURLErrorCancelled {
+                    finish(.failure(LocalModelError.timedOut))
+                } else {
+                    finish(.failure(error))
+                }
                 return
             }
             guard let http = response as? HTTPURLResponse else {
-                completion(.failure(LocalModelError.invalidResponse))
+                finish(.failure(LocalModelError.invalidResponse))
                 return
             }
             guard (200..<300).contains(http.statusCode), let data else {
@@ -135,20 +171,21 @@ final class LocalModelClient {
                         user: user,
                         requireJSON: requireJSON,
                         temperature: temperature,
-                        completion: completion
+                        completion: finish
                     )
                     return
                 }
                 let message = body.isEmpty ? "Local model returned HTTP \(http.statusCode)." : body
-                completion(.failure(LocalModelError.server(message)))
+                finish(.failure(LocalModelError.server(message)))
                 return
             }
             guard let decoded = try? JSONDecoder().decode(OllamaResponse.self, from: data) else {
-                completion(.failure(LocalModelError.invalidResponse))
+                finish(.failure(LocalModelError.invalidResponse))
                 return
             }
-            completion(.success(decoded.message.content))
-        }.resume()
+            finish(.success(decoded.message.content))
+        }
+        task?.resume()
     }
 
     private func shouldTryFallback(statusCode: Int, body: String) -> Bool {
