@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import padkey
 
@@ -10,6 +11,8 @@ final class MacCommandTests: XCTestCase {
         XCTAssertEqual(MacCommandParser.parse("Make new note"), .newNote)
         XCTAssertEqual(MacCommandParser.parse("Create a new note"), .newNote)
         XCTAssertEqual(MacCommandParser.parse("Open FaceTime"), .openFaceTime)
+        XCTAssertEqual(MacCommandParser.parse("Hello"), .conversation("Hello"))
+        XCTAssertEqual(MacCommandParser.parse("What can you do"), .conversation("What can you do"))
         XCTAssertEqual(
             MacCommandParser.parse("Call Chukwudi on FaceTime"),
             .faceTimeContact("Chukwudi")
@@ -51,6 +54,7 @@ final class MacCommandTests: XCTestCase {
     func testOrdinaryDictationIsNotIntercepted() {
         XCTAssertFalse(MacCommandParser.looksLikeVoiceCommand("This is an ordinary paragraph for my document."))
         XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Open Notes"))
+        XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Hello"))
         XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Make new note"))
         XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Open Safari"))
         XCTAssertTrue(MacCommandParser.looksLikeVoiceCommand("Open app Safari"))
@@ -66,6 +70,8 @@ final class MacCommandTests: XCTestCase {
 
     func testHoldToTalkDirectCommandParsing() {
         XCTAssertEqual(MacCommandParser.parse("Open app Safari"), .openApplication("Safari"))
+        XCTAssertEqual(MacCommandParser.parse("Can you open Safari"), .openApplication("Safari"))
+        XCTAssertEqual(MacCommandParser.parse("Please launch Safari"), .openApplication("Safari"))
         XCTAssertEqual(MacCommandParser.parse("Launch Chrome"), .openApplication("Chrome"))
         XCTAssertEqual(MacCommandParser.parse("Switch to Google Chrome"), .openApplication("Google Chrome"))
         XCTAssertEqual(MacCommandParser.parse("Open the app FaceTime"), .openFaceTime)
@@ -156,6 +162,15 @@ final class MacCommandTests: XCTestCase {
         XCTAssertEqual(models.first?.name, "gemma4:12b-mlx")
         XCTAssertEqual(models.first?.size, "6.8 GB")
         XCTAssertEqual(models.first?.modified, "9 days ago")
+    }
+
+    func testSafariResolvesThroughLaunchServicesWhenInstalled() throws {
+        guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Safari") != nil else {
+            throw XCTSkip("Safari is not installed on this test Mac.")
+        }
+
+        let app = try UIAutomation.resolveApplication(named: "Safari")
+        XCTAssertEqual(app.displayName, "Safari")
     }
 
     func testAppStateSnapshotIncludesRefsAndRedactsSecrets() {

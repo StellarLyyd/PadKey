@@ -30,16 +30,9 @@ enum UIAutomation {
     @discardableResult
     static func openApplication(named name: String) throws -> NSRunningApplication? {
         let resolved = try resolveApplication(named: name)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = [resolved.url.path]
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
+        guard NSWorkspace.shared.open(resolved.url) else {
             throw UIAutomationError.launchFailed(resolved.displayName)
         }
-        guard process.terminationStatus == 0 else { throw UIAutomationError.appNotFound(name) }
         return NSWorkspace.shared.runningApplications.first {
             $0.localizedName?.caseInsensitiveCompare(resolved.displayName) == .orderedSame
         }
@@ -53,12 +46,31 @@ enum UIAutomation {
             "settings": ["system settings"],
             "system preferences": ["system settings"],
             "facetime": ["facetime"],
+            "safari": ["safari"],
             "x code": ["xcode"],
             "vs code": ["visual studio code"],
             "music": ["music"],
             "apple music": ["music"]
         ]
         let candidateQueries = aliases[query] ?? [query]
+        let bundleAliases: [String: [String]] = [
+            "safari": ["com.apple.Safari"],
+            "facetime": ["com.apple.FaceTime"],
+            "system settings": ["com.apple.systempreferences"],
+            "settings": ["com.apple.systempreferences"],
+            "music": ["com.apple.Music"],
+            "google chrome": ["com.google.Chrome"],
+            "chrome": ["com.google.Chrome"],
+            "xcode": ["com.apple.dt.Xcode"],
+            "visual studio code": ["com.microsoft.VSCode"]
+        ]
+        for candidate in candidateQueries {
+            for bundleIdentifier in bundleAliases[candidate] ?? [] {
+                if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) {
+                    return ResolvedApplication(displayName: url.deletingPathExtension().lastPathComponent, url: url)
+                }
+            }
+        }
         let apps = installedApplications()
 
         var matches: [ResolvedApplication] = []
@@ -89,6 +101,8 @@ enum UIAutomation {
             URL(fileURLWithPath: "/Applications"),
             URL(fileURLWithPath: "/System/Applications"),
             URL(fileURLWithPath: "/System/Applications/Utilities"),
+            URL(fileURLWithPath: "/System/Volumes/Preboot/Cryptexes/App/System/Applications"),
+            URL(fileURLWithPath: "/System/Cryptexes/App/System/Applications"),
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")
         ]
         var seen = Set<String>()

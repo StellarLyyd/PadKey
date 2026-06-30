@@ -2477,7 +2477,7 @@ final class HubWindowController: NSWindowController, NSWindowDelegate, NSTextVie
         ))
         left.addArrangedSubview(pipelineToggleRow(
             title: "Command mode",
-            detail: "Route command-shaped speech through deterministic Mac tools and Accessibility instead of typing it.",
+            detail: "Route casual chat, natural requests, and Mac-control speech through PadKey instead of typing it.",
             isOn: settings.commandModeEnabled,
             action: #selector(toggleCommandMode)
         ))

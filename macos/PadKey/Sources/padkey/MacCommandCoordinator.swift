@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import CoreGraphics
 import Foundation
 
 enum GenericUIAction: Equatable {
@@ -43,9 +44,13 @@ enum MacCommandParser {
     }
 
     static func parse(_ transcript: String) -> ParsedMacCommand {
-        let command = stripWakePhrase(transcript)
+        let rawCommand = stripWakePhrase(transcript)
+        let command = canonicalCommand(from: rawCommand)
         if command.range(of: #"^(confirm|yes confirm|do it)$"#, options: [.regularExpression, .caseInsensitive]) != nil {
             return .confirm
+        }
+        if isCasualConversation(rawCommand) {
+            return .conversation(rawCommand)
         }
         if command.range(of: #"^(?:(?:make|create|start|open)\s+(?:a\s+)?new\s+note|new\s+note|blank\s+note)$"#, options: [.regularExpression, .caseInsensitive]) != nil {
             return .newNote
@@ -79,6 +84,9 @@ enum MacCommandParser {
         }
         if let value = conversationalPrompt(from: command) {
             return .conversation(value)
+        }
+        if isQuestionOrAgentConversation(command) {
+            return .conversation(command)
         }
         if command.range(of: #"^(?:copy|copy that|copy this)$"#, options: [.regularExpression, .caseInsensitive]) != nil {
             return .copy
@@ -117,6 +125,9 @@ enum MacCommandParser {
         if hasWakePhrase(transcript), !command.isEmpty {
             return .conversation(command)
         }
+        if looksLikeOpenEndedAgentInstruction(command) {
+            return .computerControl(command)
+        }
         if looksLikeComputerControlRuntime(command, originalTranscript: transcript) {
             return .computerControl(command)
         }
@@ -131,6 +142,16 @@ enum MacCommandParser {
         )
         .trimmingCharacters(in: .whitespacesAndNewlines)
         .replacingOccurrences(of: #"[.!?]+$"#, with: "", options: .regularExpression)
+    }
+
+    private static func canonicalCommand(from command: String) -> String {
+        command
+            .replacingOccurrences(
+                of: #"^\s*(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+|i\s+(?:need|want|would\s+like)\s+you\s+to\s+|i\s+need\s+to\s+|please\s+)"#,
+                with: "",
+                options: [.regularExpression, .caseInsensitive]
+            )
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func capture(_ text: String, _ pattern: String) -> String? {
@@ -164,6 +185,32 @@ enum MacCommandParser {
             }
         }
         return nil
+    }
+
+    private static func isCasualConversation(_ command: String) -> Bool {
+        normalized(command).range(
+            of: #"^(?:hi|hello|hey|yo|sup|what'?s up|good morning|good afternoon|good evening|are you there|you there|thank you|thanks|who are you|what can you do)$"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    private static func isQuestionOrAgentConversation(_ command: String) -> Bool {
+        let lower = normalized(command)
+        guard lower.count <= 240 else { return false }
+        if lower.hasSuffix("?") { return true }
+        return lower.range(
+            of: #"^(?:what|why|how|who|when|where|which|should i|do you|are you|can you|could you|would you|tell me|explain)\b"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    private static func looksLikeOpenEndedAgentInstruction(_ command: String) -> Bool {
+        let lower = normalized(command)
+        guard lower.count <= 260 else { return false }
+        return lower.range(
+            of: #"^(?:find|choose|pick|select|click|press|focus|fill|type|open|navigate|go to|look at|use|show|create|start|search|switch|move|resize|close|minimize|maximize)\b"#,
+            options: .regularExpression
+        ) != nil
     }
 
     private static func normalized(_ text: String) -> String {
@@ -541,11 +588,7 @@ final class MacCommandCoordinator {
             executeKeyboardShortcut(intent: "close_window", spoken: "Closing the window.", key: "w", command: transcript, application: preferredApplication, completion: completion)
 
         case .unknown:
-            finish(.failure(
-                intent: "command_misunderstood",
-                spoken: "I heard that as a command, but I need a clearer action or target.",
-                frontmostApp: preferredApplication?.localizedName
-            ), command: transcript, completion: completion)
+            executeLocalConversation(transcript, command: transcript, application: preferredApplication, completion: completion)
         }
     }
 
@@ -1153,6 +1196,18 @@ final class MacCommandCoordinator {
             return
         }
 
+        if let quickResponse = Self.quickConversationResponse(for: cleanedPrompt) {
+            finish(success(
+                intent: "local_conversation",
+                spoken: quickResponse,
+                actions: [MacCommandActionRecord(type: "local_conversation", appName: "PadKey", nodeId: nil, target: "Local quick response", text: cleanedPrompt)],
+                frontmostApp: application?.localizedName ?? "PadKey",
+                target: "Local quick response",
+                result: "Answered locally"
+            ), command: command, completion: completion)
+            return
+        }
+
         snapshot.status = "Thinking"
         snapshot.frontmostApp = application?.localizedName ?? "PadKey"
         snapshot.detectedIntent = "local_conversation"
@@ -1162,12 +1217,18 @@ final class MacCommandCoordinator {
         let system = """
         You are PadKey, a local-first macOS voice assistant running on the user's computer.
         Be warm, direct, and useful. Keep answers concise enough to speak aloud.
-        If the user asks for a computer action, suggest the exact PadKey command they can say.
+        You are allowed to discuss the current Mac context supplied by the app. If the user asks for a computer action that you cannot safely perform inside this chat response, suggest the exact PadKey command they can say next.
         Preserve names, product terms, unusual spellings, and the user's wording when discussing their notes.
         Do not claim to use cloud services or remote APIs.
         """
+        let contextualPrompt = """
+        User said: \(cleanedPrompt)
 
-        localModel.chat(system: system, user: cleanedPrompt, requireJSON: false, temperature: 0.45) { [weak self] result in
+        Local computer context:
+        \(conversationContext(application: application, prompt: cleanedPrompt))
+        """
+
+        localModel.chat(system: system, user: contextualPrompt, requireJSON: false, temperature: 0.45) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch result {
@@ -1182,10 +1243,74 @@ final class MacCommandCoordinator {
                         result: "Answered locally"
                     ), command: command, completion: completion)
                 case .failure(let error):
-                    self.finish(self.toolFailure(intent: "local_conversation", error: error, app: application?.localizedName ?? "PadKey"), command: command, completion: completion)
+                    if let fallback = Self.fallbackConversationResponse(for: cleanedPrompt, error: error) {
+                        self.finish(self.success(
+                            intent: "local_conversation",
+                            spoken: fallback,
+                            actions: [MacCommandActionRecord(type: "local_conversation_fallback", appName: "PadKey", nodeId: nil, target: "Local fallback", text: cleanedPrompt)],
+                            frontmostApp: application?.localizedName ?? "PadKey",
+                            target: "Local fallback",
+                            result: "Answered without the local model"
+                        ), command: command, completion: completion)
+                    } else {
+                        self.finish(self.toolFailure(intent: "local_conversation", error: error, app: application?.localizedName ?? "PadKey"), command: command, completion: completion)
+                    }
                 }
             }
         }
+    }
+
+    private func conversationContext(application: NSRunningApplication?, prompt: String) -> String {
+        var lines: [String] = []
+        if let app = try? accessibility.frontmostApp(preferred: application) {
+            lines.append("Frontmost app: \(app.name)")
+            if shouldIncludeComputerContext(prompt),
+               let running = NSRunningApplication(processIdentifier: app.processIdentifier),
+               let nodes = try? accessibility.getAccessibilityTree(for: running, maximumNodes: 220) {
+                let snapshot = AppStateSnapshotBuilder.snapshot(app: app, nodes: nodes, maxElements: 10)
+                lines.append("Accessible UI summary:\n\(snapshot.compactDescription)")
+            }
+        } else {
+            lines.append("Frontmost app: unknown")
+        }
+
+        if shouldIncludeComputerContext(prompt), CGPreflightScreenCaptureAccess() {
+            let visual = VisualPerceptionService.captureTextSnapshot(maxElements: 12)
+            lines.append("Visible text summary:\n\(visual.compactDescription)")
+        }
+
+        return lines.joined(separator: "\n\n")
+    }
+
+    private func shouldIncludeComputerContext(_ prompt: String) -> Bool {
+        let lower = prompt.lowercased()
+        return ["screen", "this app", "current app", "window", "visible", "what do you see", "where am i", "on my computer"].contains { lower.contains($0) }
+    }
+
+    private static func quickConversationResponse(for prompt: String) -> String? {
+        let lower = prompt.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch lower {
+        case "hi", "hello", "hey", "yo":
+            return "Hey, I’m here. Tell me what you want to do on this Mac."
+        case "are you there", "you there":
+            return "I’m here and listening."
+        case "thanks", "thank you":
+            return "You’re welcome."
+        case "what can you do":
+            return "I can talk, take notes, open apps, read the current app state, and control visible Mac interface elements with your approval settings."
+        default:
+            return nil
+        }
+    }
+
+    private static func fallbackConversationResponse(for prompt: String, error: Error) -> String? {
+        if quickConversationResponse(for: prompt) != nil {
+            return quickConversationResponse(for: prompt)
+        }
+        if prompt.count <= 80 {
+            return "I heard you. My local model is not responding right now, but the command and app-control tools are still available."
+        }
+        return nil
     }
 
     private func createDiagramNote(
